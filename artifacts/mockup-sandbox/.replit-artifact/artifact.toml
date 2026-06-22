@@ -5,6 +5,14 @@ version = "1.0.0"
 id = "XegfDyZt7HqfW2Bb8Ghoy"
 
 [[services]]
+localPort = 5000
+name = "Start application"
+paths = ["/"]
+
+[services.development]
+run = "cd market-intel && streamlit run app.py --server.port 5000"
+
+[[services]]
 localPort = 8081
 name = "Component Preview Server"
 paths = ["/__mockup"]

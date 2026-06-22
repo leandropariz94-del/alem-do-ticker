@@ -1,0 +1,12 @@
+kind = "web"
+previewPath = "/"
+title = "Market Intel"
+version = "1.0.0"
+
+[[services]]
+localPort = 5000
+name = "Start application"
+paths = ["/"]
+
+[services.development]
+run = "cd market-intel && streamlit run app.py --server.port 5000"
