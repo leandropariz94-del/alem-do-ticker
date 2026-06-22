@@ -157,48 +157,101 @@ def extract_text_from_pdf(pdf_bytes: bytes, filename: str = "") -> str:
     return text
 
 
-def merge_pdf_texts(files_and_texts: list[tuple[str, str]]) -> str:
-    sep = "\n\n" + "=" * 60 + "\n\n"
-    parts = [f"=== DOCUMENTO: {fn} ===\n\n{txt}" for fn, txt in files_and_texts]
-    return "\n\n" + sep.join(parts)
-
-
-def build_prompt(pdf_text: str, company: str, period: str) -> str:
-    lenses_list = "\n".join(f"- {l}" for l in LENSES)
+def _context_header(company: str, period: str) -> str:
     parts = [f"Empresa: {company}" if company else "", f"Período: {period}" if period else ""]
     header = " | ".join(p for p in parts if p)
-    header_line = f"Contexto: {header}\n\n" if header else ""
+    return f"Contexto: {header}\n\n" if header else ""
 
-    return f"""Você é um analista sênior especializado em inteligência de mercado B2B para empresas de tecnologia, dados e serviços corporativos.
 
-{header_line}Analise o(s) documento(s) abaixo com profundidade analítica e extraia insights estruturados e consolidados em exatamente 9 lentes estratégicas.
+def _parse_json_response(raw: str) -> dict:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        # drop first (```json or ```) and last (```) lines
+        raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    return json.loads(raw)
 
-Para cada lente, forneça um objeto JSON com os seguintes campos:
 
-CAMPOS DE RESUMO (visão rápida):
-- "destaques": lista de 2 a 4 strings com os principais destaques mencionados
-- "oportunidades": lista de 2 a 4 strings com oportunidades para fornecedores/parceiros nessa área
-- "alertas": lista de 1 a 3 strings com riscos, desafios ou pontos de atenção
-- "tendencia": string curta com a tendência geral (ex: "Alta", "Estável", "Queda", "Em transformação", "Aceleração")
+# ── Phase 1: compact extraction from a single PDF ──────────────────────────
 
-CAMPOS DE DETALHES (análise aprofundada — seja específico e rico em informação):
-- "detalhes": objeto com:
-    - "citacoes": lista de 3 a 6 strings com trechos ou frases REAIS extraídas dos documentos que embasam os insights. Cada citação deve vir com contexto mínimo (ex: "[Seção X]" ou "[CEO na call]"). Use aspas duplas ao redor do trecho.
-    - "numeros": lista de 3 a 6 strings com métricas, valores absolutos, percentuais, variações YoY/QoQ, metas, investimentos ou indicadores ESPECÍFICOS. Inclua unidade e contexto (ex: "R$ 2,3 bilhões investidos em tecnologia em 2025, crescimento de 18% vs 2024").
-    - "projetos": lista de 2 a 5 strings com nomes de projetos, produtos, plataformas, programas, iniciativas ou parcerias específicas citadas. Inclua uma frase sobre o que é e seu status/objetivo.
-    - "contexto_oportunidades": lista de 2 a 4 strings — uma análise aprofundada por oportunidade: por que existe, quais sinais a sustentam, como um fornecedor pode endereçá-la concretamente.
-    - "contexto_alertas": lista de 1 a 3 strings — uma análise aprofundada por alerta: causas, implicações para fornecedores, como a empresa está reagindo.
+def _build_extraction_prompt(pdf_text: str, filename: str, company: str, period: str) -> str:
+    lenses_list = "\n".join(f"- {l}" for l in LENSES)
+    header_line = _context_header(company, period)
+    return f"""Você é um analista de inteligência de mercado B2B.
 
-Lentes a analisar:
+{header_line}Analise o documento abaixo e extraia sinais estruturados em 9 lentes estratégicas.
+
+Para cada lente, forneça EXATAMENTE este JSON (sem campos extras):
+- "destaques": lista de até 3 strings com destaques principais
+- "oportunidades": lista de até 3 strings com oportunidades para fornecedores
+- "alertas": lista de até 2 strings com riscos ou pontos de atenção
+- "tendencia": string curta com tendência geral ("Alta", "Estável", "Queda", "Em transformação", "Aceleração")
+- "citacoes": lista de até 4 trechos reais do documento com contexto mínimo entre colchetes
+- "numeros": lista de até 4 métricas ou indicadores específicos com unidade e contexto
+- "projetos": lista de até 3 nomes de projetos/produtos/plataformas com descrição de uma frase
+
+Seja conciso e específico. Use apenas dados presentes no documento.
+
+Lentes:
 {lenses_list}
 
-Seja específico. Evite generalidades. Use os dados reais do documento.
+Responda APENAS com JSON válido, sem markdown:
+{{
+  "Marketing & Mídia Digital": {{"destaques":[...],"oportunidades":[...],"alertas":[...],"tendencia":"...","citacoes":[...],"numeros":[...],"projetos":[...]}},
+  "Dados / IA / Analytics": {{...}},
+  "Infraestrutura & Cloud": {{...}},
+  "CX & Relacionamento": {{...}},
+  "RH & Cultura": {{...}},
+  "Educação Corporativa": {{...}},
+  "Jurídico & Compliance": {{...}},
+  "Saúde Financeira": {{...}},
+  "ESG": {{...}}
+}}
 
-Responda APENAS com um JSON válido no seguinte formato (sem markdown, sem texto antes ou depois):
+DOCUMENTO — {filename}:
+{pdf_text[:30000]}
+"""
+
+
+# ── Phase 2: consolidation of multiple extractions ─────────────────────────
+
+def _build_consolidation_prompt(extractions: list[dict], filenames: list[str], company: str, period: str) -> str:
+    lenses_list = "\n".join(f"- {l}" for l in LENSES)
+    header_line = _context_header(company, period)
+
+    parts = []
+    for i, (fname, ext) in enumerate(zip(filenames, extractions), 1):
+        parts.append(f"=== Extração {i} — {fname} ===\n{json.dumps(ext, ensure_ascii=False, indent=2)}")
+    extractions_text = "\n\n".join(parts)
+
+    return f"""Você é um analista sênior de inteligência de mercado B2B.
+
+{header_line}Abaixo estão {len(extractions)} extração(ões) individuais de documentos da mesma empresa, cada uma cobrindo 9 lentes estratégicas.
+
+Seu trabalho é CONSOLIDAR todas as extrações em um único JSON final, seguindo estas regras:
+1. Mescle e deduplicle destaques, oportunidades, alertas, citacoes, numeros e projetos (mantenha os mais relevantes e específicos, até os limites indicados)
+2. Para "tendencia", use a tendência predominante ou mais relevante entre as extrações
+3. Gere "contexto_oportunidades": para cada oportunidade consolidada, escreva uma análise de 2-3 frases explicando por que existe, quais sinais a sustentam e como um fornecedor pode agir
+4. Gere "contexto_alertas": para cada alerta consolidado, escreva uma análise de 2-3 frases sobre causas, implicações para fornecedores e como a empresa está reagindo
+
+Limites por lente no JSON final:
+- "destaques": até 4 itens
+- "oportunidades": até 4 itens
+- "alertas": até 3 itens
+- "citacoes": até 5 itens
+- "numeros": até 5 itens
+- "projetos": até 4 itens
+- "contexto_oportunidades": um item por oportunidade (até 4)
+- "contexto_alertas": um item por alerta (até 3)
+
+Lentes:
+{lenses_list}
+
+Responda APENAS com JSON válido, sem markdown:
 {{
   "Marketing & Mídia Digital": {{
-    "destaques": [...], "oportunidades": [...], "alertas": [...], "tendencia": "...",
-    "detalhes": {{ "citacoes": [...], "numeros": [...], "projetos": [...], "contexto_oportunidades": [...], "contexto_alertas": [...] }}
+    "destaques":[...],"oportunidades":[...],"alertas":[...],"tendencia":"...",
+    "detalhes":{{"citacoes":[...],"numeros":[...],"projetos":[...],"contexto_oportunidades":[...],"contexto_alertas":[...]}}
   }},
   "Dados / IA / Analytics": {{...}},
   "Infraestrutura & Cloud": {{...}},
@@ -210,27 +263,85 @@ Responda APENAS com um JSON válido no seguinte formato (sem markdown, sem texto
   "ESG": {{...}}
 }}
 
-DOCUMENTOS:
-{pdf_text[:70000]}
+EXTRAÇÕES:
+{extractions_text}
 """
 
 
-def analyze_with_claude(pdf_text: str, company: str, period: str) -> dict:
+# ── Orchestrator ──────────────────────────────────────────────────────────
+
+def analyze_with_claude(
+    files_and_texts: list[tuple[str, str]],
+    company: str,
+    period: str,
+    progress_callback=None,
+) -> dict:
+    """
+    Two-phase processing:
+      Phase 1 — extract compact signals from each PDF individually (small payloads → no truncation)
+      Phase 2 — consolidate all extractions into the final rich JSON
+    """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY não encontrada nas variáveis de ambiente.")
 
     client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
+    total = len(files_and_texts)
+
+    # ── Phase 1 ──────────────────────────────────────────────────────────────
+    extractions: list[dict] = []
+    filenames: list[str] = []
+
+    for i, (filename, text) in enumerate(files_and_texts):
+        if progress_callback:
+            progress_callback(i, total, filename)
+
+        prompt = _build_extraction_prompt(text, filename, company, period)
+        msg = client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=4000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        extraction = _parse_json_response(msg.content[0].text)
+        extractions.append(extraction)
+        filenames.append(filename)
+
+    # ── Phase 2 ──────────────────────────────────────────────────────────────
+    if progress_callback:
+        progress_callback(total, total, "consolidando…")
+
+    # Single PDF: skip consolidation, promote flat extraction to final shape directly
+    if len(extractions) == 1:
+        return _promote_single_extraction(extractions[0])
+
+    prompt = _build_consolidation_prompt(extractions, filenames, company, period)
+    msg = client.messages.create(
         model="claude-opus-4-5",
         max_tokens=8000,
-        messages=[{"role": "user", "content": build_prompt(pdf_text, company, period)}],
+        messages=[{"role": "user", "content": prompt}],
     )
+    return _parse_json_response(msg.content[0].text)
 
-    raw = message.content[0].text.strip()
-    if raw.startswith("```"):
-        raw = "\n".join(raw.split("\n")[1:-1])
-    return json.loads(raw)
+
+def _promote_single_extraction(ext: dict) -> dict:
+    """Wrap flat per-PDF extraction into the full shape expected by the UI."""
+    result = {}
+    for lens in LENSES:
+        raw = ext.get(lens, {})
+        result[lens] = {
+            "destaques":    raw.get("destaques", []),
+            "oportunidades": raw.get("oportunidades", []),
+            "alertas":      raw.get("alertas", []),
+            "tendencia":    raw.get("tendencia", "Estável"),
+            "detalhes": {
+                "citacoes":              raw.get("citacoes", []),
+                "numeros":               raw.get("numeros", []),
+                "projetos":              raw.get("projetos", []),
+                "contexto_oportunidades": [],
+                "contexto_alertas":      [],
+            },
+        }
+    return result
 
 
 # ─── Render helpers ───────────────────────────────────────────────────────────
@@ -578,6 +689,7 @@ def page_new_analysis(selected_lenses: list[str]):
         label    = company_name or "empresa"
         per_lbl  = f" · {period}" if period else ""
         if st.button(f"🚀 Analisar {label}{per_lbl} com Claude", type="primary", use_container_width=True):
+            # ── Step 1: extract text from all PDFs ──────────────────────────
             files_and_texts = []
             with st.spinner(f"Extraindo texto de {len(uploaded_files)} arquivo(s)..."):
                 for f in uploaded_files:
@@ -591,18 +703,47 @@ def page_new_analysis(selected_lenses: list[str]):
                 st.error("Nenhum arquivo com texto válido.")
                 return
 
-            merged = merge_pdf_texts(files_and_texts)
-            st.info(f"**{len(files_and_texts)} arquivo(s)** · **{len(merged):,} chars** extraídos. Analisando...")
+            total_files = len(files_and_texts)
+            total_chars = sum(len(t) for _, t in files_and_texts)
+            st.info(
+                f"**{total_files} arquivo(s)** · **{total_chars:,} chars** extraídos. "
+                f"Processando em {total_files} chamada(s) separada(s) + consolidação..."
+            )
 
-            with st.spinner("Analisando com Claude Opus..."):
-                try:
-                    results = analyze_with_claude(merged, company_name, period)
-                except json.JSONDecodeError as e:
-                    st.error(f"Erro ao interpretar resposta da IA: {e}")
-                    return
-                except Exception as e:
-                    st.error(f"Erro na análise: {e}")
-                    return
+            # ── Step 2: two-phase Claude analysis with live progress ────────
+            progress_bar  = st.progress(0)
+            status_text   = st.empty()
+
+            def on_progress(current: int, total: int, filename: str):
+                if current < total:
+                    pct = current / (total + 1)   # +1 reserves space for consolidation step
+                    progress_bar.progress(pct)
+                    status_text.markdown(
+                        f"**Fase 1 — Extração** · arquivo {current + 1}/{total}: `{filename}`"
+                    )
+                else:
+                    progress_bar.progress(total / (total + 1))
+                    step_label = "consolidando os resultados..." if total > 1 else "gerando análise completa..."
+                    status_text.markdown(f"**Fase 2 —** {step_label}")
+
+            try:
+                results = analyze_with_claude(
+                    files_and_texts, company_name, period,
+                    progress_callback=on_progress,
+                )
+            except json.JSONDecodeError as e:
+                progress_bar.empty()
+                status_text.empty()
+                st.error(f"Erro ao interpretar resposta da IA: {e}")
+                return
+            except Exception as e:
+                progress_bar.empty()
+                status_text.empty()
+                st.error(f"Erro na análise: {e}")
+                return
+
+            progress_bar.progress(1.0)
+            status_text.empty()
 
             display_company = company_name or (
                 uploaded_files[0].name.replace(".pdf", "") if len(uploaded_files) == 1 else "Empresa"
