@@ -35,7 +35,7 @@ LENS_ICONS = {
 }
 
 
-def extract_text_from_pdf(pdf_bytes: bytes) -> str:
+def extract_text_from_pdf(pdf_bytes: bytes, filename: str = "") -> str:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     text = ""
     for page in doc:
@@ -44,17 +44,33 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     return text
 
 
-def build_prompt(pdf_text: str) -> str:
+def merge_pdf_texts(files_and_texts: list[tuple[str, str]]) -> str:
+    parts = []
+    for filename, text in files_and_texts:
+        parts.append(f"=== DOCUMENTO: {filename} ===\n\n{text}")
+    return "\n\n" + ("\n\n" + "=" * 60 + "\n\n").join(parts)
+
+
+def build_prompt(pdf_text: str, company: str, period: str) -> str:
     lenses_list = "\n".join(f"- {l}" for l in LENSES)
+    company_ctx = f"Empresa: {company}" if company else ""
+    period_ctx = f"Período: {period}" if period else ""
+    header = " | ".join(filter(None, [company_ctx, period_ctx]))
+    header_line = f"Contexto: {header}\n\n" if header else ""
+
     return f"""Você é um analista especializado em inteligência de mercado B2B.
 
-Analise o release trimestral abaixo e extraia insights estruturados em exatamente 9 lentes estratégicas.
+{header_line}Analise o(s) documento(s) abaixo (podem ser múltiplos arquivos da mesma empresa) e extraia insights estruturados e consolidados em exatamente 9 lentes estratégicas.
 
 Para cada lente, forneça um objeto JSON com os campos:
-- "destaques": lista de strings com os principais destaques mencionados no release
-- "oportunidades": lista de strings com oportunidades para fornecedores/parceiros nessa área
-- "alertas": lista de strings com riscos, desafios ou pontos de atenção
-- "tendencia": string com a tendência geral observada para esse segmento (ex: "Alta", "Estável", "Queda", "Em transformação")
+- "destaques": lista de 2 a 4 strings com os principais destaques mencionados
+- "oportunidades": lista de 2 a 4 strings com oportunidades para fornecedores/parceiros nessa área
+- "alertas": lista de 1 a 3 strings com riscos, desafios ou pontos de atenção
+- "tendencia": string curta com a tendência geral (ex: "Alta", "Estável", "Queda", "Em transformação", "Aceleração")
+- "detalhes": objeto com campos adicionais para análise aprofundada:
+    - "citacoes": lista de 2 a 4 strings com trechos ou citações diretas relevantes extraídas dos documentos (use aspas e indique o contexto brevemente)
+    - "numeros": lista de 2 a 5 strings com métricas, valores, percentuais ou indicadores específicos mencionados nos documentos para essa lente
+    - "contexto": string de 2 a 4 frases com contexto estratégico adicional, explicando o cenário mais amplo, causas ou implicações para fornecedores
 
 Lentes a analisar:
 {lenses_list}
@@ -65,7 +81,12 @@ Responda APENAS com um JSON válido no seguinte formato (sem markdown, sem texto
     "destaques": [...],
     "oportunidades": [...],
     "alertas": [...],
-    "tendencia": "..."
+    "tendencia": "...",
+    "detalhes": {{
+      "citacoes": [...],
+      "numeros": [...],
+      "contexto": "..."
+    }}
   }},
   "Dados / IA / Analytics": {{...}},
   "Infraestrutura & Cloud": {{...}},
@@ -77,12 +98,12 @@ Responda APENAS com um JSON válido no seguinte formato (sem markdown, sem texto
   "ESG": {{...}}
 }}
 
-RELEASE TRIMESTRAL:
-{pdf_text[:60000]}
+DOCUMENTOS:
+{pdf_text[:70000]}
 """
 
 
-def analyze_with_claude(pdf_text: str) -> dict:
+def analyze_with_claude(pdf_text: str, company: str, period: str) -> dict:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY não encontrada nas variáveis de ambiente.")
@@ -91,11 +112,11 @@ def analyze_with_claude(pdf_text: str) -> dict:
 
     message = client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=4096,
+        max_tokens=6000,
         messages=[
             {
                 "role": "user",
-                "content": build_prompt(pdf_text),
+                "content": build_prompt(pdf_text, company, period),
             }
         ],
     )
@@ -111,13 +132,13 @@ def analyze_with_claude(pdf_text: str) -> dict:
 
 def render_trend_badge(trend: str) -> str:
     trend_lower = trend.lower()
-    if "alta" in trend_lower or "crescimento" in trend_lower or "aumento" in trend_lower:
+    if any(w in trend_lower for w in ["alta", "crescimento", "aumento", "aceleração", "aceleracao", "expansão"]):
         color = "#22c55e"
         icon = "↑"
-    elif "queda" in trend_lower or "redução" in trend_lower or "declínio" in trend_lower:
+    elif any(w in trend_lower for w in ["queda", "redução", "declínio", "recuo", "desaceleração"]):
         color = "#ef4444"
         icon = "↓"
-    elif "transformação" in trend_lower or "mudança" in trend_lower or "evolução" in trend_lower:
+    elif any(w in trend_lower for w in ["transformação", "mudança", "evolução", "transição", "disrupção"]):
         color = "#f59e0b"
         icon = "⟳"
     else:
@@ -126,7 +147,7 @@ def render_trend_badge(trend: str) -> str:
     return f'<span style="background:{color};color:white;padding:2px 10px;border-radius:12px;font-size:0.78rem;font-weight:600;">{icon} {trend}</span>'
 
 
-def render_lens_card(lens_name: str, data: dict):
+def render_lens_card(lens_name: str, data: dict, card_index: int):
     icon = LENS_ICONS.get(lens_name, "📌")
     trend_html = render_trend_badge(data.get("tendencia", "Estável"))
 
@@ -136,8 +157,8 @@ def render_lens_card(lens_name: str, data: dict):
             <div style="
                 border:1px solid #e2e8f0;
                 border-radius:12px;
-                padding:20px 24px;
-                margin-bottom:16px;
+                padding:20px 24px 4px 24px;
+                margin-bottom:4px;
                 background:#ffffff;
                 box-shadow:0 1px 4px rgba(0,0,0,0.06);
             ">
@@ -166,13 +187,54 @@ def render_lens_card(lens_name: str, data: dict):
             for item in data.get("alertas", []):
                 st.markdown(f"- {item}")
 
+        detalhes = data.get("detalhes", {})
+        if detalhes:
+            with st.expander("🔍 Ver detalhes aprofundados"):
+                d_col1, d_col2, d_col3 = st.columns(3)
+
+                with d_col1:
+                    st.markdown("**💬 Citações do Relatório**")
+                    citacoes = detalhes.get("citacoes", [])
+                    if citacoes:
+                        for c in citacoes:
+                            st.markdown(
+                                f"""<blockquote style="border-left:3px solid #6366f1;padding:6px 12px;margin:6px 0;background:#f8f7ff;border-radius:0 6px 6px 0;font-size:0.88rem;color:#374151;font-style:italic;">{c}</blockquote>""",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("Sem citações identificadas.")
+
+                with d_col2:
+                    st.markdown("**📊 Números & Métricas**")
+                    numeros = detalhes.get("numeros", [])
+                    if numeros:
+                        for n in numeros:
+                            st.markdown(
+                                f"""<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:6px 10px;margin:4px 0;font-size:0.88rem;color:#166534;">{n}</div>""",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("Sem métricas específicas identificadas.")
+
+                with d_col3:
+                    st.markdown("**🧭 Contexto Estratégico**")
+                    contexto = detalhes.get("contexto", "")
+                    if contexto:
+                        st.markdown(
+                            f"""<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:10px 12px;font-size:0.88rem;color:#92400e;line-height:1.6;">{contexto}</div>""",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.caption("Sem contexto adicional identificado.")
+
         st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
 
 
 def main():
     st.title("📊 Market Intel")
     st.markdown(
-        "Faça upload do **release trimestral** de uma empresa brasileira e extraia inteligência estratégica em 9 lentes de mercado."
+        "Faça upload de **um ou mais PDFs** de uma empresa brasileira e extraia inteligência estratégica consolidada em 9 lentes de mercado."
     )
     st.divider()
 
@@ -198,36 +260,76 @@ def main():
         st.divider()
         st.caption("**Market Intel** · Análise por IA (Claude)")
 
-    uploaded_file = st.file_uploader(
-        "Selecione o PDF do release trimestral",
+    col_company, col_period = st.columns([2, 1])
+    with col_company:
+        company_name = st.text_input(
+            "🏢 Nome da empresa",
+            placeholder="Ex: Itaú, Ambev, Embraer...",
+            help="Opcional — ajuda a contextualizar a análise.",
+        )
+    with col_period:
+        period = st.text_input(
+            "📅 Período",
+            placeholder="Ex: 4T25, 1T26, 2025...",
+            help="Opcional — trimestre ou ano de referência.",
+        )
+
+    uploaded_files = st.file_uploader(
+        "Selecione os PDFs do release trimestral (pode enviar vários)",
         type=["pdf"],
-        help="Releases de resultados, relatórios de earnings ou relatórios trimestrais em PDF.",
+        accept_multiple_files=True,
+        help="Envie um ou mais PDFs da mesma empresa. O conteúdo será consolidado em uma análise única.",
     )
 
-    if uploaded_file is not None:
-        st.success(f"Arquivo carregado: **{uploaded_file.name}** ({uploaded_file.size / 1024:.1f} KB)")
+    if uploaded_files:
+        total_size = sum(f.size for f in uploaded_files) / 1024
+        if len(uploaded_files) == 1:
+            st.success(f"**1 arquivo** carregado — {uploaded_files[0].name} ({total_size:.1f} KB)")
+        else:
+            st.success(f"**{len(uploaded_files)} arquivos** carregados — {total_size:.1f} KB no total")
+            with st.expander(f"Ver lista de arquivos ({len(uploaded_files)})"):
+                for i, f in enumerate(uploaded_files, 1):
+                    st.markdown(f"**{i}.** {f.name} · {f.size / 1024:.1f} KB")
 
-        analyze_btn = st.button("🚀 Analisar com Claude", type="primary", use_container_width=True)
+        label = company_name or "empresa"
+        per_label = f" · {period}" if period else ""
+        analyze_btn = st.button(
+            f"🚀 Analisar {label}{per_label} com Claude",
+            type="primary",
+            use_container_width=True,
+        )
 
         if analyze_btn:
             if "results" in st.session_state:
                 del st.session_state["results"]
 
-            with st.spinner("Extraindo texto do PDF..."):
-                pdf_bytes = uploaded_file.read()
-                pdf_text = extract_text_from_pdf(pdf_bytes)
+            files_and_texts = []
+            with st.spinner(f"Extraindo texto de {len(uploaded_files)} arquivo(s)..."):
+                for f in uploaded_files:
+                    pdf_bytes = f.read()
+                    text = extract_text_from_pdf(pdf_bytes, f.name)
+                    if text.strip():
+                        files_and_texts.append((f.name, text))
+                    else:
+                        st.warning(f"⚠️ Não foi possível extrair texto de **{f.name}** — ignorado.")
 
-            if not pdf_text.strip():
-                st.error("Não foi possível extrair texto do PDF. Verifique se o arquivo não é escaneado ou protegido.")
+            if not files_and_texts:
+                st.error("Nenhum arquivo com texto válido. Verifique se os PDFs não são escaneados ou protegidos.")
                 return
 
-            st.info(f"Texto extraído: **{len(pdf_text):,} caracteres**. Enviando para análise...")
+            merged_text = merge_pdf_texts(files_and_texts)
+            total_chars = len(merged_text)
+            st.info(
+                f"**{len(files_and_texts)} arquivo(s)** processados · **{total_chars:,} caracteres** extraídos. Enviando para análise..."
+            )
 
             with st.spinner("Analisando com Claude Opus... Isso pode levar alguns segundos."):
                 try:
-                    results = analyze_with_claude(pdf_text)
+                    results = analyze_with_claude(merged_text, company_name, period)
                     st.session_state["results"] = results
-                    st.session_state["company_name"] = uploaded_file.name.replace(".pdf", "")
+                    st.session_state["display_company"] = company_name or (uploaded_files[0].name.replace(".pdf", "") if len(uploaded_files) == 1 else "Empresa")
+                    st.session_state["display_period"] = period
+                    st.session_state["files_count"] = len(files_and_texts)
                 except json.JSONDecodeError as e:
                     st.error(f"Erro ao interpretar resposta da IA: {e}")
                     return
@@ -237,10 +339,15 @@ def main():
 
     if "results" in st.session_state:
         results = st.session_state["results"]
-        company_name = st.session_state.get("company_name", "Empresa")
+        display_company = st.session_state.get("display_company", "Empresa")
+        display_period = st.session_state.get("display_period", "")
+        files_count = st.session_state.get("files_count", 1)
 
-        st.success("✅ Análise concluída com sucesso!")
-        st.subheader(f"Insights estratégicos — {company_name}")
+        period_suffix = f" · {display_period}" if display_period else ""
+        files_label = f"{files_count} arquivo(s) consolidado(s)" if files_count > 1 else "1 arquivo"
+
+        st.success(f"✅ Análise concluída — {files_label}")
+        st.subheader(f"Insights estratégicos — {display_company}{period_suffix}")
 
         lenses_to_show = [l for l in selected_lenses if l in results]
 
@@ -248,11 +355,11 @@ def main():
             st.warning("Nenhuma lente selecionada. Use o filtro lateral para escolher os segmentos.")
             return
 
-        st.markdown(f"Exibindo **{len(lenses_to_show)}** de {len(LENSES)} lentes.")
+        st.markdown(f"Exibindo **{len(lenses_to_show)}** de {len(LENSES)} lentes · clique em **🔍 Ver detalhes** em cada card para análise aprofundada.")
         st.divider()
 
-        for lens in lenses_to_show:
-            render_lens_card(lens, results[lens])
+        for i, lens in enumerate(lenses_to_show):
+            render_lens_card(lens, results[lens], i)
 
 
 if __name__ == "__main__":
