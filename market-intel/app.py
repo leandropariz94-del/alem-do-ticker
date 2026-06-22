@@ -38,6 +38,26 @@ LENS_ICONS = {
     "ESG": "🌿",
 }
 
+INVESTOR_LENSES = [
+    "Fundamentos Financeiros",
+    "Alocação de Capital",
+    "Vantagem Competitiva (Moat)",
+    "Gestão e Governança",
+    "Riscos Declarados",
+    "Guidance e Perspectivas",
+    "Score Buffett",
+]
+
+INVESTOR_LENS_ICONS = {
+    "Fundamentos Financeiros":     "💰",
+    "Alocação de Capital":         "📊",
+    "Vantagem Competitiva (Moat)": "🏰",
+    "Gestão e Governança":         "👔",
+    "Riscos Declarados":           "⚠️",
+    "Guidance e Perspectivas":     "🔭",
+    "Score Buffett":               "🧾",
+}
+
 
 # ─── Database ────────────────────────────────────────────────────────────────
 
@@ -56,6 +76,11 @@ def init_db():
     """)
     con.commit()
     con.close()
+
+
+def _detect_mode(results: dict) -> str:
+    """Return 'investor' if results contain investor lenses, else 'fornecedor'."""
+    return "investor" if "Fundamentos Financeiros" in results else "fornecedor"
 
 
 def compute_opportunity_score(results: dict) -> float:
@@ -81,8 +106,39 @@ def compute_opportunity_score(results: dict) -> float:
     return round(max(0.0, min(100.0, normalized)), 1)
 
 
+def compute_investor_score(results: dict) -> float:
+    """Investor mode: primary score is the Buffett note (1–10 → 10–100).
+    If not available, fall back to a composite from other lenses."""
+    buffett = results.get("Score Buffett", {})
+    nota = buffett.get("nota")
+    if nota is not None:
+        try:
+            return round(min(100.0, max(0.0, float(nota) * 10)), 1)
+        except (TypeError, ValueError):
+            pass
+    # Fallback: composite from non-Buffett investor lenses
+    total = 0.0
+    count = 0
+    for lens, lens_data in results.items():
+        if lens == "Score Buffett":
+            continue
+        insights = len(lens_data.get("insights", []))
+        riscos   = len(lens_data.get("riscos", []))
+        trend    = lens_data.get("tendencia", "").lower()
+        trend_score = 2.0 if any(w in trend for w in ["alta", "crescimento", "aceleração"]) else (
+                      1.0 if any(w in trend for w in ["transformação", "evolução"]) else (
+                     -2.0 if any(w in trend for w in ["queda", "declínio"]) else 0.0))
+        total += insights * 3.0 + trend_score - riscos * 0.5
+        count += 1
+    if count == 0:
+        return 50.0
+    normalized = (total + 15.0) / 105.0 * 100
+    return round(max(0.0, min(100.0, normalized)), 1)
+
+
 def save_analysis(company: str, period: str, files_count: int, results: dict) -> int:
-    score = compute_opportunity_score(results)
+    mode = _detect_mode(results)
+    score = compute_investor_score(results) if mode == "investor" else compute_opportunity_score(results)
     con = sqlite3.connect(DB_PATH)
     cur = con.execute(
         "INSERT INTO analyses (company, period, created_at, files_count, results_json, score) VALUES (?, ?, ?, ?, ?, ?)",
@@ -275,11 +331,13 @@ def analyze_with_claude(
     company: str,
     period: str,
     progress_callback=None,
+    mode: str = "fornecedor",
 ) -> dict:
     """
     Two-phase processing:
       Phase 1 — extract compact signals from each PDF individually (small payloads → no truncation)
       Phase 2 — consolidate all extractions into the final rich JSON
+    mode: 'fornecedor' | 'investor'
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -287,6 +345,10 @@ def analyze_with_claude(
 
     client = anthropic.Anthropic(api_key=api_key)
     total = len(files_and_texts)
+
+    build_ext_prompt  = _build_investor_extraction_prompt   if mode == "investor" else _build_extraction_prompt
+    build_cons_prompt = _build_investor_consolidation_prompt if mode == "investor" else _build_consolidation_prompt
+    promote_fn        = _promote_single_extraction_investor  if mode == "investor" else _promote_single_extraction
 
     # ── Phase 1 ──────────────────────────────────────────────────────────────
     extractions: list[dict] = []
@@ -296,7 +358,7 @@ def analyze_with_claude(
         if progress_callback:
             progress_callback(i, total, filename)
 
-        prompt = _build_extraction_prompt(text, filename, company, period)
+        prompt = build_ext_prompt(text, filename, company, period)
         msg = client.messages.create(
             model="claude-opus-4-5",
             max_tokens=4000,
@@ -312,9 +374,9 @@ def analyze_with_claude(
 
     # Single PDF: skip consolidation, promote flat extraction to final shape directly
     if len(extractions) == 1:
-        return _promote_single_extraction(extractions[0])
+        return promote_fn(extractions[0])
 
-    prompt = _build_consolidation_prompt(extractions, filenames, company, period)
+    prompt = build_cons_prompt(extractions, filenames, company, period)
     msg = client.messages.create(
         model="claude-opus-4-5",
         max_tokens=8000,
@@ -324,7 +386,7 @@ def analyze_with_claude(
 
 
 def _promote_single_extraction(ext: dict) -> dict:
-    """Wrap flat per-PDF extraction into the full shape expected by the UI."""
+    """Wrap flat per-PDF fornecedor extraction into the full shape expected by the UI."""
     result = {}
     for lens in LENSES:
         raw = ext.get(lens, {})
@@ -341,6 +403,128 @@ def _promote_single_extraction(ext: dict) -> dict:
                 "contexto_alertas":      [],
             },
         }
+    return result
+
+
+# ── Investor prompts ──────────────────────────────────────────────────────────
+
+_INVESTOR_LENS_LIST = "\n".join(f"- {l}" for l in INVESTOR_LENSES if l != "Score Buffett")
+
+def _build_investor_extraction_prompt(pdf_text: str, filename: str, company: str, period: str) -> str:
+    header_line = _context_header(company, period)
+    return f"""Você é um analista de investimentos especializado em value investing.
+
+{header_line}Analise o documento abaixo e extraia sinais para avaliação de investimento em 7 dimensões.
+
+Para as lentes regulares (todas exceto "Score Buffett"), forneça:
+- "destaques": lista de até 3 strings com os principais fatos observados
+- "insights": lista de até 3 strings com interpretações relevantes para um investidor
+- "riscos": lista de até 2 strings com riscos ou pontos negativos para o investidor
+- "tendencia": string curta com tendência ("Alta", "Estável", "Queda", "Em transformação", "Aceleração")
+- "citacoes": lista de até 4 trechos reais do documento com contexto entre colchetes
+- "numeros": lista de até 4 métricas específicas com unidade e contexto
+- "projetos": lista de até 3 iniciativas, programas ou produtos mencionados com descrição de uma frase
+
+Para "Score Buffett", forneça:
+- "nota": número inteiro de 1 a 10 baseado nos critérios públicos de Warren Buffett
+- "justificativa": parágrafo de 3-4 frases explicando a nota de forma fundamentada
+- "criterios": objeto com 6 chaves fixas (string explicativa de 1-2 frases cada):
+    - "negocio_compreensivel": o negócio é simples e previsível?
+    - "vantagem_duravel": possui moat defensável de longo prazo?
+    - "gestao_confiavel": a gestão age no interesse dos acionistas?
+    - "historico_lucratividade": histórico consistente de lucros e margens?
+    - "retorno_capital_proprio": ROE/ROIC são satisfatórios?
+    - "perspectiva_longo_prazo": perspectivas de crescimento sustentável?
+
+Lentes a analisar:
+{_INVESTOR_LENS_LIST}
+- Score Buffett
+
+Responda APENAS com JSON válido, sem markdown:
+{{
+  "Fundamentos Financeiros": {{"destaques":[...],"insights":[...],"riscos":[...],"tendencia":"...","citacoes":[...],"numeros":[...],"projetos":[...]}},
+  "Alocação de Capital": {{...}},
+  "Vantagem Competitiva (Moat)": {{...}},
+  "Gestão e Governança": {{...}},
+  "Riscos Declarados": {{...}},
+  "Guidance e Perspectivas": {{...}},
+  "Score Buffett": {{"nota":7,"justificativa":"...","criterios":{{"negocio_compreensivel":"...","vantagem_duravel":"...","gestao_confiavel":"...","historico_lucratividade":"...","retorno_capital_proprio":"...","perspectiva_longo_prazo":"..."}}}}
+}}
+
+DOCUMENTO — {filename}:
+{pdf_text[:30000]}
+"""
+
+
+def _build_investor_consolidation_prompt(
+    extractions: list[dict], filenames: list[str], company: str, period: str
+) -> str:
+    header_line = _context_header(company, period)
+    parts = []
+    for i, (fname, ext) in enumerate(zip(filenames, extractions), 1):
+        parts.append(f"=== Extração {i} — {fname} ===\n{json.dumps(ext, ensure_ascii=False, indent=2)}")
+    extractions_text = "\n\n".join(parts)
+
+    return f"""Você é um analista sênior de investimentos especializado em value investing.
+
+{header_line}Abaixo estão {len(extractions)} extração(ões) de documentos da mesma empresa cobrindo 7 dimensões de investimento.
+
+CONSOLIDE tudo em um único JSON final seguindo estas regras:
+1. Mescle e deduplique destaques, insights, riscos, citacoes, numeros e projetos
+2. Para "tendencia", use a tendência predominante entre as extrações
+3. Gere "contexto_insights": para cada insight consolidado, escreva 2-3 frases explicando as implicações para um investidor de longo prazo
+4. Gere "contexto_riscos": para cada risco consolidado, escreva 2-3 frases sobre magnitude, probabilidade e mitigantes
+5. Para "Score Buffett": consolide as notas (média ponderada ou julgamento analítico), reescreva a justificativa e consolide os critérios
+
+Limites no JSON final (lentes regulares):
+- destaques: até 4; insights: até 4; riscos: até 3
+- citacoes: até 5; numeros: até 5; projetos: até 4
+- contexto_insights: um por insight; contexto_riscos: um por risco
+
+Responda APENAS com JSON válido, sem markdown:
+{{
+  "Fundamentos Financeiros": {{
+    "destaques":[...],"insights":[...],"riscos":[...],"tendencia":"...",
+    "detalhes":{{"citacoes":[...],"numeros":[...],"projetos":[...],"contexto_insights":[...],"contexto_riscos":[]}}
+  }},
+  "Alocação de Capital": {{...}},
+  "Vantagem Competitiva (Moat)": {{...}},
+  "Gestão e Governança": {{...}},
+  "Riscos Declarados": {{...}},
+  "Guidance e Perspectivas": {{...}},
+  "Score Buffett": {{"nota":7,"justificativa":"...","criterios":{{"negocio_compreensivel":"...","vantagem_duravel":"...","gestao_confiavel":"...","historico_lucratividade":"...","retorno_capital_proprio":"...","perspectiva_longo_prazo":"..."}}}}
+}}
+
+EXTRAÇÕES:
+{extractions_text}
+"""
+
+
+def _promote_single_extraction_investor(ext: dict) -> dict:
+    """Wrap flat per-PDF investor extraction into the full shape expected by the UI."""
+    result = {}
+    for lens in INVESTOR_LENSES:
+        raw = ext.get(lens, {})
+        if lens == "Score Buffett":
+            result[lens] = {
+                "nota":         raw.get("nota", 5),
+                "justificativa": raw.get("justificativa", ""),
+                "criterios":    raw.get("criterios", {}),
+            }
+        else:
+            result[lens] = {
+                "destaques":  raw.get("destaques", []),
+                "insights":   raw.get("insights", []),
+                "riscos":     raw.get("riscos", []),
+                "tendencia":  raw.get("tendencia", "Estável"),
+                "detalhes": {
+                    "citacoes":         raw.get("citacoes", []),
+                    "numeros":          raw.get("numeros", []),
+                    "projetos":         raw.get("projetos", []),
+                    "contexto_insights": [],
+                    "contexto_riscos":  [],
+                },
+            }
     return result
 
 
@@ -488,6 +672,193 @@ def render_lens_card(lens_name: str, data: dict, card_index: int):
         st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
 
 
+def render_investor_lens_card(lens_name: str, data: dict, card_index: int):
+    """Card for investor mode — regular lenses (not Score Buffett)."""
+    icon = INVESTOR_LENS_ICONS.get(lens_name, "📌")
+    trend_html = render_trend_badge(data.get("tendencia", "Estável"))
+
+    with st.container():
+        st.markdown(
+            f"""<div style="border:1px solid #e2e8f0;border-radius:12px;padding:20px 24px 4px 24px;
+                margin-bottom:4px;background:#fafbff;box-shadow:0 1px 4px rgba(0,0,0,0.06);">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+                    <h3 style="margin:0;font-size:1.05rem;color:#1e293b;">{icon} {lens_name}</h3>
+                    {trend_html}
+                </div>""",
+            unsafe_allow_html=True,
+        )
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("**✅ Destaques**")
+            for item in data.get("destaques", []):
+                st.markdown(f"- {item}")
+        with col2:
+            st.markdown("**📈 Insights de Investimento**")
+            for item in data.get("insights", []):
+                st.markdown(f"- {item}")
+        with col3:
+            st.markdown("**🚨 Riscos**")
+            for item in data.get("riscos", []):
+                st.markdown(f"- {item}")
+
+        detalhes  = data.get("detalhes", {})
+        insights  = data.get("insights", [])
+        riscos    = data.get("riscos", [])
+
+        if detalhes:
+            with st.expander("🔍 Ver detalhes aprofundados"):
+                citacoes      = detalhes.get("citacoes", [])
+                numeros       = detalhes.get("numeros", [])
+                projetos      = detalhes.get("projetos", [])
+                ctx_insights  = detalhes.get("contexto_insights", [])
+                ctx_riscos    = detalhes.get("contexto_riscos", [])
+
+                st.markdown("---")
+                r1c1, r1c2, r1c3 = st.columns(3)
+
+                with r1c1:
+                    st.markdown("#### 💬 Citações do Relatório")
+                    if citacoes:
+                        for c in citacoes:
+                            st.markdown(
+                                f'<blockquote style="border-left:3px solid #0ea5e9;padding:8px 14px;margin:8px 0;'
+                                f'background:#f0f9ff;border-radius:0 8px 8px 0;font-size:0.87rem;color:#374151;'
+                                f'font-style:italic;line-height:1.6;">{c}</blockquote>',
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("Sem citações identificadas.")
+
+                with r1c2:
+                    st.markdown("#### 📊 Números & Métricas")
+                    if numeros:
+                        for n in numeros:
+                            st.markdown(
+                                f'<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;'
+                                f'padding:8px 12px;margin:6px 0;font-size:0.87rem;color:#166534;font-weight:500;">📌 {n}</div>',
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("Sem métricas específicas identificadas.")
+
+                with r1c3:
+                    st.markdown("#### 🏗️ Projetos & Iniciativas")
+                    if projetos:
+                        for p in projetos:
+                            st.markdown(
+                                f'<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;'
+                                f'padding:8px 12px;margin:6px 0;font-size:0.87rem;color:#1e40af;line-height:1.55;">🔷 {p}</div>',
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("Nenhum projeto ou iniciativa identificado.")
+
+                st.markdown("---")
+                r2c1, r2c2 = st.columns(2)
+
+                with r2c1:
+                    st.markdown("#### 📈 Contexto dos Insights")
+                    if ctx_insights:
+                        for i, ctx in enumerate(ctx_insights):
+                            label = insights[i] if i < len(insights) else f"Insight {i+1}"
+                            st.markdown(
+                                f'<div style="margin-bottom:12px;">'
+                                f'<div style="font-size:0.82rem;font-weight:700;color:#0369a1;margin-bottom:4px;'
+                                f'text-transform:uppercase;letter-spacing:0.03em;">↳ {label}</div>'
+                                f'<div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;'
+                                f'padding:10px 14px;font-size:0.87rem;color:#0c4a6e;line-height:1.65;">{ctx}</div></div>',
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("Sem contexto adicional para os insights.")
+
+                with r2c2:
+                    st.markdown("#### 🚨 Contexto dos Riscos")
+                    if ctx_riscos:
+                        for i, ctx in enumerate(ctx_riscos):
+                            label = riscos[i] if i < len(riscos) else f"Risco {i+1}"
+                            st.markdown(
+                                f'<div style="margin-bottom:12px;">'
+                                f'<div style="font-size:0.82rem;font-weight:700;color:#b91c1c;margin-bottom:4px;'
+                                f'text-transform:uppercase;letter-spacing:0.03em;">↳ {label}</div>'
+                                f'<div style="background:#fff1f2;border:1px solid #fecdd3;border-radius:8px;'
+                                f'padding:10px 14px;font-size:0.87rem;color:#881337;line-height:1.65;">{ctx}</div></div>',
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("Sem contexto adicional para os riscos.")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
+
+
+def render_buffett_score_card(data: dict):
+    """Special card for the Score Buffett lens."""
+    nota        = data.get("nota", 5)
+    justificativa = data.get("justificativa", "")
+    criterios   = data.get("criterios", {})
+
+    try:
+        nota = int(nota)
+    except (TypeError, ValueError):
+        nota = 5
+
+    nota_color = "#22c55e" if nota >= 8 else ("#f59e0b" if nota >= 6 else "#ef4444")
+    pct = nota / 10
+
+    CRITERIO_LABELS = {
+        "negocio_compreensivel":   ("🔍", "Negócio Compreensível"),
+        "vantagem_duravel":        ("🏰", "Vantagem Durável (Moat)"),
+        "gestao_confiavel":        ("👔", "Gestão Confiável"),
+        "historico_lucratividade": ("📈", "Histórico de Lucratividade"),
+        "retorno_capital_proprio": ("💰", "Retorno sobre Capital"),
+        "perspectiva_longo_prazo": ("🔭", "Perspectiva de Longo Prazo"),
+    }
+
+    with st.container():
+        st.markdown(
+            f"""<div style="border:2px solid #d97706;border-radius:16px;padding:24px 28px 12px 28px;
+                margin-bottom:4px;background:linear-gradient(135deg,#fffbeb 0%,#fef3c7 100%);
+                box-shadow:0 2px 8px rgba(217,119,6,0.12);">
+                <div style="display:flex;align-items:center;gap:16px;margin-bottom:18px;">
+                    <div style="font-size:3.5rem;font-weight:900;color:{nota_color};line-height:1;">{nota}</div>
+                    <div>
+                        <div style="font-size:1.1rem;font-weight:700;color:#92400e;">🧾 Score Buffett</div>
+                        <div style="font-size:0.8rem;color:#b45309;">Critérios públicos de Warren Buffett · escala 1–10</div>
+                    </div>
+                    <div style="flex:1;"></div>
+                </div>""",
+            unsafe_allow_html=True,
+        )
+        st.progress(pct)
+
+        if justificativa:
+            st.markdown(
+                f'<p style="margin:14px 0 6px 0;font-size:0.93rem;color:#451a03;line-height:1.7;">{justificativa}</p>',
+                unsafe_allow_html=True,
+            )
+
+        if criterios:
+            with st.expander("📋 Ver avaliação por critério"):
+                c1, c2 = st.columns(2)
+                for j, (key, (icon, label)) in enumerate(CRITERIO_LABELS.items()):
+                    texto = criterios.get(key, "—")
+                    col = c1 if j % 2 == 0 else c2
+                    with col:
+                        st.markdown(
+                            f'<div style="margin-bottom:14px;">'
+                            f'<div style="font-size:0.82rem;font-weight:700;color:#92400e;margin-bottom:4px;">{icon} {label}</div>'
+                            f'<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;'
+                            f'padding:9px 13px;font-size:0.87rem;color:#451a03;line-height:1.6;">{texto}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
+
+
 # ─── Pages ────────────────────────────────────────────────────────────────────
 
 def page_overview():
@@ -608,17 +979,23 @@ def page_analysis(selected_lenses: list[str]):
     s_color  = score_color(score)
     results  = rec["results"]
     date_lbl = rec["created_at"][:10]
-    period_suffix = f" · {period}" if period else ""
+    period_suffix  = f" · {period}" if period else ""
+    mode           = _detect_mode(results)
+    is_investor    = mode == "investor"
+    all_lenses_ref = INVESTOR_LENSES if is_investor else LENSES
+    score_label    = "Score Buffett" if is_investor else "Score / 100"
+    mode_badge     = "📈 Modo Investidor" if is_investor else "🏢 Modo Fornecedor"
 
     hdr_col, score_col = st.columns([5, 1])
     with hdr_col:
         st.title(f"📊 {company}{period_suffix}")
-        st.caption(f"Análise salva em {date_lbl} · {rec['files_count']} arquivo(s)")
+        st.caption(f"{mode_badge} · Análise salva em {date_lbl} · {rec['files_count']} arquivo(s)")
     with score_col:
+        score_display = f"{score / 10:.1f}/10" if is_investor else f"{score:.0f}"
         st.markdown(
             f'<div style="text-align:center;padding-top:10px;">'
-            f'<div style="font-size:2rem;font-weight:800;color:{s_color};">{score:.0f}</div>'
-            f'<div style="font-size:0.75rem;color:#94a3b8;">Score / 100</div>'
+            f'<div style="font-size:2rem;font-weight:800;color:{s_color};">{score_display}</div>'
+            f'<div style="font-size:0.75rem;color:#94a3b8;">{score_label}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -637,22 +1014,40 @@ def page_analysis(selected_lenses: list[str]):
         st.warning("Nenhuma lente selecionada. Use o filtro lateral.")
         return
 
+    n_total = len(all_lenses_ref)
     st.markdown(
-        f"Exibindo **{len(lenses_to_show)}** de {len(LENSES)} lentes · "
+        f"Exibindo **{len(lenses_to_show)}** de {n_total} lentes · "
         f"clique em **🔍 Ver detalhes** em cada card para análise aprofundada."
     )
     st.divider()
 
-    for i, lens in enumerate(lenses_to_show):
-        if lens in results:
-            render_lens_card(lens, results[lens], i)
+    if is_investor:
+        for i, lens in enumerate(lenses_to_show):
+            if lens not in results:
+                continue
+            if lens == "Score Buffett":
+                render_buffett_score_card(results[lens])
+            else:
+                render_investor_lens_card(lens, results[lens], i)
+    else:
+        for i, lens in enumerate(lenses_to_show):
+            if lens in results:
+                render_lens_card(lens, results[lens], i)
 
 
-def page_new_analysis(selected_lenses: list[str]):
-    st.title("📊 Market Intel")
-    st.markdown(
-        "Faça upload de **um ou mais PDFs** de uma empresa brasileira e extraia inteligência estratégica consolidada em 9 lentes de mercado."
-    )
+def page_new_analysis(selected_lenses: list[str], mode: str = "fornecedor"):
+    is_investor = mode == "investor"
+    if is_investor:
+        st.title("📈 Market Intel — Visão Investidor")
+        st.markdown(
+            "Faça upload de **um ou mais PDFs** de uma empresa e extraia análise orientada a **decisão de investimento**: "
+            "fundamentos, moat, gestão, riscos e Score Buffett."
+        )
+    else:
+        st.title("📊 Market Intel — Visão Fornecedor")
+        st.markdown(
+            "Faça upload de **um ou mais PDFs** de uma empresa brasileira e extraia inteligência estratégica consolidada em 9 lentes de mercado."
+        )
     st.divider()
 
     col_company, col_period = st.columns([2, 1])
@@ -730,6 +1125,7 @@ def page_new_analysis(selected_lenses: list[str]):
                 results = analyze_with_claude(
                     files_and_texts, company_name, period,
                     progress_callback=on_progress,
+                    mode=mode,
                 )
             except json.JSONDecodeError as e:
                 progress_bar.empty()
@@ -768,9 +1164,30 @@ def page_new_analysis(selected_lenses: list[str]):
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
-def render_sidebar() -> list[str]:
+def render_sidebar() -> tuple[list[str], str]:
     with st.sidebar:
         st.markdown("## 📊 Market Intel")
+
+        # ── Mode toggle ──────────────────────────────────────────────────────
+        st.markdown("**Modo de análise**")
+        mode_choice = st.radio(
+            "modo",
+            options=["🏢 Fornecedor", "📈 Investidor"],
+            index=1 if st.session_state.get("mode") == "investor" else 0,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="mode_radio",
+        )
+        new_mode = "investor" if "Investidor" in mode_choice else "fornecedor"
+        if new_mode != st.session_state.get("mode"):
+            st.session_state["mode"] = new_mode
+            # Reset to new analysis when mode changes
+            st.session_state["page"] = "nova_analise"
+            if "loaded_analysis_id" in st.session_state:
+                del st.session_state["loaded_analysis_id"]
+            st.rerun()
+
+        st.divider()
 
         if st.button("✏️ Nova Análise", use_container_width=True):
             st.session_state["page"] = "nova_analise"
@@ -784,20 +1201,24 @@ def render_sidebar() -> list[str]:
 
         st.divider()
 
-        # Lens filter (only on analysis/new pages)
-        current_page = st.session_state.get("page", "nova_analise")
-        selected_lenses: list[str] = LENSES
+        # ── Lens filter (only on analysis/new pages) ─────────────────────────
+        current_page  = st.session_state.get("page", "nova_analise")
+        mode          = st.session_state.get("mode", "fornecedor")
+        is_investor   = mode == "investor"
+        active_lenses = INVESTOR_LENSES if is_investor else LENSES
+        active_icons  = INVESTOR_LENS_ICONS if is_investor else LENS_ICONS
+        selected_lenses: list[str] = list(active_lenses)
 
         if current_page != "visao_geral":
             st.markdown("**🔍 Filtrar por Lente**")
             select_all = st.checkbox("Selecionar todas", value=True)
             if select_all:
-                for lens in LENSES:
-                    st.checkbox(f"{LENS_ICONS.get(lens, '📌')} {lens}", value=True, disabled=True, key=f"cb_{lens}")
+                for lens in active_lenses:
+                    st.checkbox(f"{active_icons.get(lens, '📌')} {lens}", value=True, disabled=True, key=f"cb_{lens}")
             else:
                 selected_lenses = []
-                for lens in LENSES:
-                    if st.checkbox(f"{LENS_ICONS.get(lens, '📌')} {lens}", value=True, key=f"cb_{lens}"):
+                for lens in active_lenses:
+                    if st.checkbox(f"{active_icons.get(lens, '📌')} {lens}", value=True, key=f"cb_{lens}"):
                         selected_lenses.append(lens)
             st.divider()
 
@@ -836,7 +1257,7 @@ def render_sidebar() -> list[str]:
         st.divider()
         st.caption("**Market Intel** · Powered by Claude")
 
-    return selected_lenses
+    return selected_lenses, mode
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -846,8 +1267,10 @@ def main():
 
     if "page" not in st.session_state:
         st.session_state["page"] = "nova_analise"
+    if "mode" not in st.session_state:
+        st.session_state["mode"] = "fornecedor"
 
-    selected_lenses = render_sidebar()
+    selected_lenses, mode = render_sidebar()
     page = st.session_state["page"]
 
     if page == "visao_geral":
@@ -855,7 +1278,7 @@ def main():
     elif page == "analise_detalhe" and "loaded_analysis_id" in st.session_state:
         page_analysis(selected_lenses)
     else:
-        page_new_analysis(selected_lenses)
+        page_new_analysis(selected_lenses, mode=mode)
 
 
 if __name__ == "__main__":
