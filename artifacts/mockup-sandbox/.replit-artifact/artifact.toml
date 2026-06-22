@@ -10,7 +10,7 @@ name = "Start application"
 paths = ["/"]
 
 [services.development]
-run = "cd market-intel && streamlit run app.py --server.port 5000"
+run = "cd /home/runner/workspace/market-intel && streamlit run app.py --server.port 5000"
 
 [[services]]
 localPort = 8081

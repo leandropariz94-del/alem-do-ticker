@@ -58,22 +58,30 @@ def build_prompt(pdf_text: str, company: str, period: str) -> str:
     header = " | ".join(filter(None, [company_ctx, period_ctx]))
     header_line = f"Contexto: {header}\n\n" if header else ""
 
-    return f"""Você é um analista especializado em inteligência de mercado B2B.
+    return f"""Você é um analista sênior especializado em inteligência de mercado B2B para empresas de tecnologia, dados e serviços corporativos.
 
-{header_line}Analise o(s) documento(s) abaixo (podem ser múltiplos arquivos da mesma empresa) e extraia insights estruturados e consolidados em exatamente 9 lentes estratégicas.
+{header_line}Analise o(s) documento(s) abaixo (podem ser múltiplos arquivos da mesma empresa) com profundidade analítica e extraia insights estruturados e consolidados em exatamente 9 lentes estratégicas.
 
-Para cada lente, forneça um objeto JSON com os campos:
+Para cada lente, forneça um objeto JSON com os seguintes campos:
+
+CAMPOS DE RESUMO (visão rápida):
 - "destaques": lista de 2 a 4 strings com os principais destaques mencionados
 - "oportunidades": lista de 2 a 4 strings com oportunidades para fornecedores/parceiros nessa área
 - "alertas": lista de 1 a 3 strings com riscos, desafios ou pontos de atenção
 - "tendencia": string curta com a tendência geral (ex: "Alta", "Estável", "Queda", "Em transformação", "Aceleração")
-- "detalhes": objeto com campos adicionais para análise aprofundada:
-    - "citacoes": lista de 2 a 4 strings com trechos ou citações diretas relevantes extraídas dos documentos (use aspas e indique o contexto brevemente)
-    - "numeros": lista de 2 a 5 strings com métricas, valores, percentuais ou indicadores específicos mencionados nos documentos para essa lente
-    - "contexto": string de 2 a 4 frases com contexto estratégico adicional, explicando o cenário mais amplo, causas ou implicações para fornecedores
+
+CAMPOS DE DETALHES (análise aprofundada — seja específico e rico em informação):
+- "detalhes": objeto com:
+    - "citacoes": lista de 3 a 6 strings com trechos ou frases REAIS extraídas dos documentos que embasam os insights. Cada citação deve vir com contexto mínimo (ex: "[Seção X]" ou "[CEO na call]"). Use aspas duplas ao redor do trecho. Priorize afirmações com dados, metas, posicionamentos estratégicos ou reconhecimentos de desafio.
+    - "numeros": lista de 3 a 6 strings com métricas, valores absolutos, percentuais, variações YoY/QoQ, metas, investimentos ou indicadores ESPECÍFICOS mencionados para essa lente. Inclua unidade e contexto (ex: "R$ 2,3 bilhões investidos em tecnologia em 2025, crescimento de 18% vs 2024").
+    - "projetos": lista de 2 a 5 strings com nomes de projetos, produtos, plataformas, programas, iniciativas ou parcerias específicas citadas nos documentos para essa lente. Inclua uma frase de contexto sobre o que é e o seu status/objetivo (ex: "Plataforma X — lançada em Q3, foco em automação de crédito para PMEs").
+    - "contexto_oportunidades": lista de 2 a 4 strings, uma por oportunidade listada em "oportunidades", com análise aprofundada do por quê essa oportunidade existe, quais sinais do relatório a sustentam, e como um fornecedor pode endereçá-la de forma concreta.
+    - "contexto_alertas": lista de 1 a 3 strings, uma por alerta listado em "alertas", com análise aprofundada das causas, implicações para fornecedores e como o mercado ou a empresa está reagindo a esse risco.
 
 Lentes a analisar:
 {lenses_list}
+
+Seja específico. Evite generalidades. Use os dados reais do documento. Se não houver informação suficiente para uma lente, preencha com o que há e indique brevemente a limitação em "contexto_oportunidades".
 
 Responda APENAS com um JSON válido no seguinte formato (sem markdown, sem texto antes ou depois):
 {{
@@ -85,7 +93,9 @@ Responda APENAS com um JSON válido no seguinte formato (sem markdown, sem texto
     "detalhes": {{
       "citacoes": [...],
       "numeros": [...],
-      "contexto": "..."
+      "projetos": [...],
+      "contexto_oportunidades": [...],
+      "contexto_alertas": [...]
     }}
   }},
   "Dados / IA / Analytics": {{...}},
@@ -112,7 +122,7 @@ def analyze_with_claude(pdf_text: str, company: str, period: str) -> dict:
 
     message = client.messages.create(
         model="claude-opus-4-5",
-        max_tokens=6000,
+        max_tokens=8000,
         messages=[
             {
                 "role": "user",
@@ -188,44 +198,100 @@ def render_lens_card(lens_name: str, data: dict, card_index: int):
                 st.markdown(f"- {item}")
 
         detalhes = data.get("detalhes", {})
+        oportunidades = data.get("oportunidades", [])
+        alertas = data.get("alertas", [])
+
         if detalhes:
             with st.expander("🔍 Ver detalhes aprofundados"):
-                d_col1, d_col2, d_col3 = st.columns(3)
 
-                with d_col1:
-                    st.markdown("**💬 Citações do Relatório**")
-                    citacoes = detalhes.get("citacoes", [])
+                citacoes = detalhes.get("citacoes", [])
+                numeros = detalhes.get("numeros", [])
+                projetos = detalhes.get("projetos", [])
+                ctx_ops = detalhes.get("contexto_oportunidades", [])
+                ctx_alerts = detalhes.get("contexto_alertas", [])
+
+                # Row 1: Citações + Números + Projetos
+                st.markdown("---")
+                r1c1, r1c2, r1c3 = st.columns(3)
+
+                with r1c1:
+                    st.markdown("#### 💬 Citações do Relatório")
                     if citacoes:
                         for c in citacoes:
                             st.markdown(
-                                f"""<blockquote style="border-left:3px solid #6366f1;padding:6px 12px;margin:6px 0;background:#f8f7ff;border-radius:0 6px 6px 0;font-size:0.88rem;color:#374151;font-style:italic;">{c}</blockquote>""",
+                                f"""<blockquote style="border-left:3px solid #6366f1;padding:8px 14px;margin:8px 0;background:#f8f7ff;border-radius:0 8px 8px 0;font-size:0.87rem;color:#374151;font-style:italic;line-height:1.6;">{c}</blockquote>""",
                                 unsafe_allow_html=True,
                             )
                     else:
                         st.caption("Sem citações identificadas.")
 
-                with d_col2:
-                    st.markdown("**📊 Números & Métricas**")
-                    numeros = detalhes.get("numeros", [])
+                with r1c2:
+                    st.markdown("#### 📊 Números & Métricas")
                     if numeros:
                         for n in numeros:
                             st.markdown(
-                                f"""<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:6px 10px;margin:4px 0;font-size:0.88rem;color:#166534;">{n}</div>""",
+                                f"""<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 12px;margin:6px 0;font-size:0.87rem;color:#166534;font-weight:500;">📌 {n}</div>""",
                                 unsafe_allow_html=True,
                             )
                     else:
                         st.caption("Sem métricas específicas identificadas.")
 
-                with d_col3:
-                    st.markdown("**🧭 Contexto Estratégico**")
-                    contexto = detalhes.get("contexto", "")
-                    if contexto:
-                        st.markdown(
-                            f"""<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:10px 12px;font-size:0.88rem;color:#92400e;line-height:1.6;">{contexto}</div>""",
-                            unsafe_allow_html=True,
-                        )
+                with r1c3:
+                    st.markdown("#### 🚀 Projetos & Iniciativas")
+                    if projetos:
+                        for p in projetos:
+                            st.markdown(
+                                f"""<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin:6px 0;font-size:0.87rem;color:#1e40af;line-height:1.55;">🔷 {p}</div>""",
+                                unsafe_allow_html=True,
+                            )
                     else:
-                        st.caption("Sem contexto adicional identificado.")
+                        st.caption("Nenhum projeto ou iniciativa identificado.")
+
+                # Row 2: Contexto por Oportunidade + Contexto por Alerta
+                st.markdown("---")
+                r2c1, r2c2 = st.columns(2)
+
+                with r2c1:
+                    st.markdown("#### 🎯 Contexto das Oportunidades")
+                    if ctx_ops and oportunidades:
+                        for i, ctx in enumerate(ctx_ops):
+                            op_label = oportunidades[i] if i < len(oportunidades) else f"Oportunidade {i+1}"
+                            st.markdown(
+                                f"""<div style="margin-bottom:12px;">
+                                    <div style="font-size:0.82rem;font-weight:700;color:#7c3aed;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.03em;">↳ {op_label}</div>
+                                    <div style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:10px 14px;font-size:0.87rem;color:#4c1d95;line-height:1.65;">{ctx}</div>
+                                </div>""",
+                                unsafe_allow_html=True,
+                            )
+                    elif ctx_ops:
+                        for ctx in ctx_ops:
+                            st.markdown(
+                                f"""<div style="background:#faf5ff;border:1px solid #e9d5ff;border-radius:8px;padding:10px 14px;margin:6px 0;font-size:0.87rem;color:#4c1d95;line-height:1.65;">{ctx}</div>""",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("Sem contexto adicional para as oportunidades.")
+
+                with r2c2:
+                    st.markdown("#### ⚠️ Contexto dos Alertas")
+                    if ctx_alerts and alertas:
+                        for i, ctx in enumerate(ctx_alerts):
+                            alert_label = alertas[i] if i < len(alertas) else f"Alerta {i+1}"
+                            st.markdown(
+                                f"""<div style="margin-bottom:12px;">
+                                    <div style="font-size:0.82rem;font-weight:700;color:#b91c1c;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.03em;">↳ {alert_label}</div>
+                                    <div style="background:#fff1f2;border:1px solid #fecdd3;border-radius:8px;padding:10px 14px;font-size:0.87rem;color:#881337;line-height:1.65;">{ctx}</div>
+                                </div>""",
+                                unsafe_allow_html=True,
+                            )
+                    elif ctx_alerts:
+                        for ctx in ctx_alerts:
+                            st.markdown(
+                                f"""<div style="background:#fff1f2;border:1px solid #fecdd3;border-radius:8px;padding:10px 14px;margin:6px 0;font-size:0.87rem;color:#881337;line-height:1.65;">{ctx}</div>""",
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.caption("Sem contexto adicional para os alertas.")
 
         st.markdown("</div>", unsafe_allow_html=True)
         st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
