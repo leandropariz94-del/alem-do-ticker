@@ -6,17 +6,23 @@ description: How the market-intel Streamlit app is served and how it stores/sepa
 # Market Intel (Streamlit) — non-obvious facts
 
 ## Which workflow serves the app
-- The live app is served by the workflow **`artifacts/mockup-sandbox: Start application`** (`cd market-intel && streamlit run app.py --server.port 5000`). Restart THAT one to reload code.
-- The plain **`Start application`** workflow stays **FAILED** (port conflict) — this is expected, not a bug.
-- The `mockup-sandbox` artifact dir hosts TWO services: the Streamlit app AND a Vite "Component Preview Server". A screenshot of `/` (or `/__mockup/`) hits the preview server, NOT Streamlit. There is no reliable preview-pane screenshot path for this Streamlit app; validate via syntax check + DB checks + logs instead.
+- **Which workflow serves Streamlit can flip between sessions.** Two workflows both run `cd market-intel && streamlit run app.py --server.port 5000`: the plain **`Start application`** and **`artifacts/mockup-sandbox: Start application`**. Only one can bind port 5000; the other goes **FAILED** with "Port 5000 is not available" — this is expected, not a bug.
+- **Do not trust this file's memory of which one is live.** Run `refresh_all_logs` and restart whichever one is currently RUNNING to reload code. Leave the FAILED duplicate alone.
+- **No reliable preview-pane screenshot path.** `market-intel` is NOT a registered artifact, so `screenshot(app_preview, artifact_dir_name="market-intel")` errors ("Artifact not found"). The mockup-sandbox artifact's `/` / `/__mockup/` hits the Vite preview server, not Streamlit. Validate via `curl -s -o /dev/null -w "%{http_code}" http://localhost:5000/` (expect 200), syntax check, DB checks, and logs instead.
 
-## Mode separation (Fornecedor vs Investidor)
-- Analyses are tagged with a `mode` column (`'fornecedor'` | `'investor'`) in `market_intel.db`. `init_db()` adds the column and backfills existing rows via `_detect_mode(results)`.
-- `_detect_mode` returns `'investor'` iff results contain investor lenses (key "Fundamentos Financeiros"), else `'fornecedor'`.
-- DB query helpers (`list_analyses`, `list_periods`, `analyses_for_period`) take an optional `mode` filter. The sidebar history and Visão Geral both filter by `st.session_state["mode"]` so the two modes never mix.
+## Modes (Fornecedor / Investidor / DP6)
+- Analyses are tagged with a `mode` column (`'fornecedor'` | `'investor'` | `'dp6'`) in `market_intel.db`. `init_db()` adds the column and backfills via `_detect_mode(results)`.
+- `_detect_mode` precedence: investor sentinels first (`"Fundamentos Financeiros"` or `"Score Buffett"`) → `investor`; then `"Oportunidades para a DP6"` → `dp6`; else `fornecedor`. **Why:** investor takes precedence so a malformed payload carrying both key families is never misclassified as DP6. Lens key sets are otherwise disjoint.
+- Mode-aware helpers centralize branching: `lenses_for_mode(mode)`, `icons_for_mode(mode)`, `_score_for_mode(mode, results)`. Sidebar history + Visão Geral filter by `st.session_state["mode"]` so modes never mix.
+
+## DP6 mode (commercial-intelligence mode for DP6 the consultancy)
+- **Feature flag:** env var `DP6_MODE_ENABLED`, default ON. `"0"/"false"/"off"` hide the DP6 radio option; if dp6 was the active session mode when the flag goes off, sidebar falls back to `fornecedor`. Purpose: hide DP6 mode when releasing the app to the market.
+- 7 lenses (`DP6_LENSES`): Destaque do Período, Eficiência e Performance, Evolução Digital e IA, Ecossistema de Dados, Dores e Metas Futuras, Direcionamento Estratégico, Oportunidades para a DP6.
+- Prompts: `_build_dp6_extraction_prompt` + `_build_dp6_consolidation_prompt` (shared `_DP6_SECTION_FORMAT`: Insight Consolidado / Sinais para a DP6 / Métricas / Citações; the opportunity lens adds Serviços DP6 Recomendados + Abordagem Comercial + Prioridade). Wired via `mode=="dp6"` in `analyze_with_claude`.
 
 ## Score scales
-- Fornecedor score is 0–100 (opportunity score). Investor score is stored as Buffett nota×10 (0–100) but DISPLAYED as `/10` in detail + ranking/sidebar. **Why:** users think of the Buffett score as 0–10; only the internal/heatmap math uses the 0–100 form.
+- Stored 0–100 for all modes. Displayed: investor `/10` (Buffett nota×10 stored, shown as 0–10 because users think 0–10); fornecedor & dp6 `/100`. `score_color` thresholds 70/45.
+- `compute_dp6_score` ("temperatura comercial"): per-lens "Sinais para a DP6" bullets capped at 3 (×2.5), opportunity "Serviços DP6 Recomendados" capped at 5 (×1.5), Prioridade Alta +10 / Média +5, trend ±1.5, normalized by /80 then clamped 0–100. **Why:** caps + denominator-above-max keep discrimination at the top (typical ~40-50, strong ~80-90) instead of saturating at 100.
 
 ## Validation
-- No good preview screenshot. Validate: `cd market-intel && python3 -c "import ast; ast.parse(open('app.py').read())"`, then exercise DB helpers via `python3 -c "import app; app.init_db(); ..."`.
+- `cd market-intel && python3 -c "import ast; ast.parse(open('app.py').read())"`, then exercise funcs via `python3 -c` after `os.environ.setdefault("ANTHROPIC_API_KEY","x"); import app` (ignore the Streamlit ScriptRunContext warning).

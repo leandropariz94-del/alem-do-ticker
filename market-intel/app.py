@@ -60,6 +60,73 @@ INVESTOR_LENS_ICONS = {
     "Score Buffett":               "🧾",
 }
 
+# ── Modo DP6 ───────────────────────────────────────────────────────────────────
+# Inteligência comercial sob medida para a DP6: lê releases de empresas-alvo e
+# mapeia onde a DP6 pode vender seus serviços de dados/analytics/IA de marketing.
+# "Oportunidades para a DP6" é a chave única usada para detectar este modo.
+DP6_LENSES = [
+    "Destaque do Período",
+    "Eficiência e Performance",
+    "Evolução Digital e IA",
+    "Ecossistema de Dados",
+    "Dores e Metas Futuras",
+    "Direcionamento Estratégico",
+    "Oportunidades para a DP6",
+]
+
+DP6_LENS_ICONS = {
+    "Destaque do Período":        "📣",
+    "Eficiência e Performance":   "📈",
+    "Evolução Digital e IA":      "🤖",
+    "Ecossistema de Dados":       "🗄️",
+    "Dores e Metas Futuras":      "🎯",
+    "Direcionamento Estratégico": "🧭",
+    "Oportunidades para a DP6":   "🤝",
+}
+
+DP6_CONTEXT = (
+    "A DP6 é uma consultoria brasileira de tecnologia e dados de marketing (parte do The Brandtech "
+    "Group), isenta — não compra mídia, atua como auditora de performance, com equipe técnica "
+    "altamente certificada. Atua em 5 frentes: "
+    "(1) Digital Analytics — implementação/auditoria de GA4, Firebase, Adobe Analytics e AppsFlyer, "
+    "data quality, observabilidade e governança de dados (produto SmartTrack 360, GenAI); "
+    "(2) Visão Única do Cliente — Data Warehouse, Datamarts, CDPs e arquitetura Data Mesh em Cloud "
+    "(GCP/AWS/Azure); "
+    "(3) Ciência de Dados, Reports e Insights — MMM (Marketing Mix Modeling), Atribuição Multitoque "
+    "(MTA), Lift Analysis, modelos preditivos de ML/IA (LTV, Churn, Segmentação), dashboards e dataviz; "
+    "(4) Audiências, CRO e Personalização — programas de testes A/B (Optimizely/VWO), Data Clean Rooms, "
+    "marketing ágil e personalização de jornadas; "
+    "(5) Soluções GenAI proprietárias — Reporting Chatbot, Feed Optimizer, App Review Benchmark, "
+    "SEOAgent e Creative Insights."
+)
+
+
+def dp6_enabled() -> bool:
+    """Feature flag for the DP6 module. Default ON (internal use).
+
+    Set the env var DP6_MODE_ENABLED to '0'/'false'/'off' to hide the DP6 mode
+    from the UI (e.g. before releasing the app to the broader market). No code is
+    removed — flip the flag back to re-enable it.
+    """
+    val = os.environ.get("DP6_MODE_ENABLED", "1").strip().lower()
+    return val not in ("0", "false", "no", "off", "")
+
+
+def lenses_for_mode(mode: str) -> list[str]:
+    if mode == "investor":
+        return INVESTOR_LENSES
+    if mode == "dp6":
+        return DP6_LENSES
+    return LENSES
+
+
+def icons_for_mode(mode: str) -> dict[str, str]:
+    if mode == "investor":
+        return INVESTOR_LENS_ICONS
+    if mode == "dp6":
+        return DP6_LENS_ICONS
+    return LENS_ICONS
+
 
 # ─── Database ────────────────────────────────────────────────────────────────
 
@@ -91,8 +158,16 @@ def init_db():
 
 
 def _detect_mode(results: dict) -> str:
-    """Return 'investor' if results contain investor lenses, else 'fornecedor'."""
-    return "investor" if "Fundamentos Financeiros" in results else "fornecedor"
+    """Detect the analysis mode from the lens keys present in the results.
+
+    Investor sentinels take precedence so a malformed payload carrying both key
+    families is never misclassified as DP6."""
+    has_investor = "Fundamentos Financeiros" in results or "Score Buffett" in results
+    if has_investor:
+        return "investor"
+    if "Oportunidades para a DP6" in results:
+        return "dp6"
+    return "fornecedor"
 
 
 def compute_opportunity_score(results: dict) -> float:
@@ -144,9 +219,45 @@ def compute_investor_score(results: dict) -> float:
     return round(max(0.0, min(100.0, (total + 15.0) / 105.0 * 100)), 1)
 
 
+def compute_dp6_score(results: dict) -> float:
+    """Score DP6 mode — a 0-100 'commercial temperature' for DP6.
+
+    Rewards explicit DP6 sales signals ("Sinais para a DP6"), concrete service
+    recommendations and a high declared priority; mild trend adjustment."""
+    total = 0.0
+    for lens, raw in results.items():
+        md = _compat_md(raw)
+        # Cap per-lens bullet contributions so a verbose section can't dominate.
+        total += min(_count_bullets(md, "Sinais para a DP6"), 3) * 2.5
+        if lens == "Oportunidades para a DP6":
+            total += min(_count_bullets(md, "Serviços DP6 Recomendados"), 5) * 1.5
+            low = md.lower()
+            if re.search(r'prioridade:\*\*\s*alta', low):
+                total += 10.0
+            elif re.search(r'prioridade:\*\*\s*m[ée]dia', low):
+                total += 5.0
+        trend = _extract_tendencia(md).lower()
+        if any(w in trend for w in ["alta", "quente", "crescimento", "aceleração", "aceleracao", "expansão"]):
+            total += 1.5
+        elif any(w in trend for w in ["queda", "frio", "redução", "reducao", "declínio"]):
+            total -= 1.5
+    # Denominator sits above the realistic max so even strong leads keep headroom
+    # (typical ~40-50, strong ~80-90), preserving discrimination at the top.
+    normalized = total / 80.0 * 100
+    return round(max(0.0, min(100.0, normalized)), 1)
+
+
+def _score_for_mode(mode: str, results: dict) -> float:
+    if mode == "investor":
+        return compute_investor_score(results)
+    if mode == "dp6":
+        return compute_dp6_score(results)
+    return compute_opportunity_score(results)
+
+
 def save_analysis(company: str, period: str, files_count: int, results: dict) -> int:
     mode = _detect_mode(results)
-    score = compute_investor_score(results) if mode == "investor" else compute_opportunity_score(results)
+    score = _score_for_mode(mode, results)
     con = sqlite3.connect(DB_PATH)
     cur = con.execute(
         "INSERT INTO analyses (company, period, created_at, files_count, results_json, score, mode) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -573,6 +684,110 @@ TEXTOS POR LENTE:
 """
 
 
+# ── Modo DP6: prompts de inteligência comercial ───────────────────────────────
+
+_DP6_ANALYTICAL = [l for l in DP6_LENSES if l != "Oportunidades para a DP6"]
+
+_DP6_SECTION_FORMAT = """FORMATO DAS LENTES ANALÍTICAS (todas, exceto "Oportunidades para a DP6"):
+
+## [Nome da Lente]
+
+**Tendência:** [Alta | Estável | Queda | Em transformação | Aceleração]
+
+**Insight Consolidado:**
+- análise principal, específica, com dados reais do release (estilo dossiê)
+
+**Sinais para a DP6:**
+- gancho comercial: a necessidade de dados/analytics/IA/personalização que isto revela e que a DP6 resolve
+
+**Métricas & Números:**
+- métrica com valor e contexto
+
+**Citações:**
+- "trecho real do documento [seção ou contexto]"
+
+---
+
+FORMATO DA LENTE FINAL (obrigatória, sempre por último):
+
+## Oportunidades para a DP6
+
+**Tendência:** [Quente | Morno | Frio]
+
+**Serviços DP6 Recomendados:** (use "—" quando um serviço não se aplicar)
+- 🔍 **Digital Analytics:** onde/por que faz sentido
+- 🏗️ **Visão Única do Cliente (CDP & Cloud):** onde/por que faz sentido
+- 📊 **Ciência de Dados (MMM, MTA, ML):** onde/por que faz sentido
+- 🎯 **Audiências, CRO & Personalização:** onde/por que faz sentido
+- 🤖 **Soluções GenAI:** onde/por que faz sentido
+
+**Abordagem Comercial Sugerida:**
+- ângulo de pitch concreto, ancorado nas dores e metas declaradas pela empresa
+
+**Prioridade:** [Alta | Média | Baixa]"""
+
+
+def _build_dp6_extraction_prompt(pdf_text: str, filename: str, company: str, period: str) -> str:
+    lenses_list = "\n".join(f"- {l}" for l in DP6_LENSES)
+    header_line = _context_header(company, period)
+    return f"""Você é um analista de inteligência comercial da DP6.
+
+{DP6_CONTEXT}
+
+{header_line}Analise o release/relatório abaixo do ponto de vista da DP6: identifique o panorama \
+estratégico da empresa e, sobretudo, onde a DP6 pode atuar comercialmente. Produza um relatório em \
+markdown com exatamente {len(DP6_LENSES)} seções, uma por lente.
+
+LENTES A ANALISAR (use exatamente estes nomes nos headers `## `):
+{lenses_list}
+
+{_DP6_SECTION_FORMAT}
+
+REGRAS:
+- Copie o nome de cada lente EXATAMENTE como na lista acima
+- "Oportunidades para a DP6" sempre por último
+- 2 a 4 bullets por subseção; omita subseções sem dados relevantes
+- Separe cada lente com `---`
+- Seja específico; use apenas dados presentes no documento; conecte sempre os achados aos serviços da DP6
+
+DOCUMENTO — {filename}:
+{pdf_text[:8000]}
+"""
+
+
+def _build_dp6_consolidation_prompt(
+    per_doc_sections: list[dict], filenames: list[str], company: str, period: str
+) -> str:
+    header_line = _context_header(company, period)
+    lenses_list = "\n".join(f"- {l}" for l in DP6_LENSES)
+    blocks: list[str] = []
+    for lens in DP6_LENSES:
+        blocks.append(f"=== {lens} ===")
+        for fname, sections in zip(filenames, per_doc_sections):
+            text = sections.get(lens, "(sem dados)") or "(sem dados)"
+            blocks.append(f"[{fname}]\n{text}")
+        blocks.append("")
+    combined = "\n".join(blocks)
+
+    return f"""Você é um analista sênior de inteligência comercial da DP6.
+
+{DP6_CONTEXT}
+
+{header_line}Abaixo estão análises por lente extraídas de {len(per_doc_sections)} documentos da mesma empresa.
+
+Consolide em um único relatório markdown final, deduplicando e priorizando o mais relevante. \
+Use o MESMO formato de seção descrito a seguir.
+
+LENTES (use exatamente estes nomes nos headers `## `):
+{lenses_list}
+
+{_DP6_SECTION_FORMAT}
+
+TEXTOS POR LENTE (consolide e deduplique):
+{combined}
+"""
+
+
 # ── Orchestrator ──────────────────────────────────────────────────────────────
 
 def analyze_with_claude(
@@ -594,10 +809,16 @@ def analyze_with_claude(
 
     client = anthropic.Anthropic(api_key=api_key)
     total  = len(files_and_texts)
-    is_investor = mode == "investor"
-    active_lenses   = INVESTOR_LENSES if is_investor else LENSES
-    build_ext_prompt  = _build_investor_extraction_prompt   if is_investor else _build_extraction_prompt
-    build_cons_prompt = _build_investor_consolidation_prompt if is_investor else _build_consolidation_prompt
+    active_lenses = lenses_for_mode(mode)
+    if mode == "investor":
+        build_ext_prompt  = _build_investor_extraction_prompt
+        build_cons_prompt = _build_investor_consolidation_prompt
+    elif mode == "dp6":
+        build_ext_prompt  = _build_dp6_extraction_prompt
+        build_cons_prompt = _build_dp6_consolidation_prompt
+    else:
+        build_ext_prompt  = _build_extraction_prompt
+        build_cons_prompt = _build_consolidation_prompt
 
     # Model fallback chain: try the higher-quality model first, then fall back
     # to lighter models that retain capacity when the larger ones are overloaded
@@ -683,9 +904,9 @@ def analyze_with_claude(
 
 def render_trend_badge(trend: str) -> str:
     t = trend.lower()
-    if any(w in t for w in ["alta", "crescimento", "aumento", "aceleração", "aceleracao", "expansão"]):
+    if any(w in t for w in ["alta", "crescimento", "aumento", "aceleração", "aceleracao", "expansão", "quente"]):
         color, icon = "#22c55e", "↑"
-    elif any(w in t for w in ["queda", "redução", "reducao", "declínio", "recuo", "desaceleração"]):
+    elif any(w in t for w in ["queda", "redução", "reducao", "declínio", "recuo", "desaceleração", "frio"]):
         color, icon = "#ef4444", "↓"
     elif any(w in t for w in ["transformação", "transformacao", "mudança", "evolução", "transição", "disrupção"]):
         color, icon = "#f59e0b", "⟳"
@@ -756,6 +977,32 @@ def render_investor_lens_card(lens_name: str, raw_data, card_index: int):
     st.divider()
 
 
+def render_dp6_lens_card(lens_name: str, raw_data, card_index: int):
+    """Render a DP6 lens card. raw_data may be a markdown string or legacy dict."""
+    md_text    = _compat_md(raw_data)
+    icon       = DP6_LENS_ICONS.get(lens_name, "📌")
+    tendencia  = _extract_tendencia(md_text)
+    trend_html = render_trend_badge(tendencia)
+    body = re.sub(r'\*\*Tend[êe]ncia:\*\*[^\n]*\n?', '', md_text, flags=re.IGNORECASE).strip()
+
+    is_opportunity = lens_name == "Oportunidades para a DP6"
+    title_color = "#7c3aed" if is_opportunity else "#1e293b"
+
+    hdr_col, badge_col = st.columns([5, 1])
+    with hdr_col:
+        st.markdown(
+            f'<div style="font-size:1.05rem;font-weight:700;color:{title_color};padding-top:2px;">'
+            f'{icon} {lens_name}</div>',
+            unsafe_allow_html=True,
+        )
+    with badge_col:
+        st.markdown(trend_html, unsafe_allow_html=True)
+
+    if body:
+        st.markdown(_md_escape_dollars(body))
+    st.divider()
+
+
 def render_buffett_score_card(raw_data):
     """Render the Score Buffett card. raw_data may be markdown string or legacy dict."""
     md_text = _compat_md(raw_data)
@@ -796,8 +1043,13 @@ def render_buffett_score_card(raw_data):
 def page_overview():
     mode        = st.session_state.get("mode", "fornecedor")
     is_investor = mode == "investor"
-    title       = "📈 Visão Geral — Ranking de Investimentos" if is_investor else "📈 Visão Geral — Ranking de Oportunidades"
-    mode_badge  = "📈 Modo Investidor" if is_investor else "🏢 Modo Fornecedor"
+    is_dp6      = mode == "dp6"
+    if is_investor:
+        title, mode_badge = "📈 Visão Geral — Ranking de Investimentos", "📈 Modo Investidor"
+    elif is_dp6:
+        title, mode_badge = "🤝 Visão Geral — Ranking de Oportunidades DP6", "🤝 Modo DP6"
+    else:
+        title, mode_badge = "📈 Visão Geral — Ranking de Oportunidades", "🏢 Modo Fornecedor"
     st.title(title)
     st.caption(f"{mode_badge} · mostrando apenas as análises deste modo")
 
@@ -808,6 +1060,16 @@ def page_overview():
                 "0–100 (nota × 10). Ele resume a qualidade do negócio segundo os critérios de Warren Buffett "
                 "— vantagem competitiva durável, consistência de resultados, qualidade da gestão e previsibilidade. "
                 "Quanto maior, mais o negócio se aproxima do perfil de um bom investimento de longo prazo."
+            )
+        elif is_dp6:
+            st.markdown(
+                "O score do **Modo DP6** é a **temperatura comercial** da empresa para a DP6 (0 a 100). "
+                "Para cada lente somamos:\n\n"
+                "- **+3 pontos** por cada *sinal para a DP6* (gancho comercial identificado)\n"
+                "- **+2 pontos** por cada *serviço DP6 recomendado* na lente de oportunidades\n"
+                "- **Prioridade:** Alta **+8**, Média **+4**\n"
+                "- **Tendência:** quente/alta **+2**, fria/queda **−1**\n\n"
+                "A soma é normalizada para 0–100. Quanto maior, mais quente a oportunidade de venda para a DP6."
             )
         else:
             st.markdown(
@@ -823,7 +1085,7 @@ def page_overview():
     periods = list_periods(mode)
     all_analyses = list_analyses(mode)
     if not all_analyses:
-        label = "Investidor" if is_investor else "Fornecedor"
+        label = "Investidor" if is_investor else ("DP6" if is_dp6 else "Fornecedor")
         st.info(f"Nenhuma análise salva no **Modo {label}** ainda. Faça uma nova análise para começar.")
         return
 
@@ -922,6 +1184,11 @@ def page_overview():
         heatmap_lenses = [l for l in INVESTOR_LENSES if l != "Score Buffett"]
         bullet_label = "Insights de Investimento"
         icon_map = INVESTOR_LENS_ICONS
+    elif is_dp6:
+        st.subheader("🔥 Lentes com mais sinais para a DP6 no período")
+        heatmap_lenses = [l for l in DP6_LENSES if l != "Oportunidades para a DP6"]
+        bullet_label = "Sinais para a DP6"
+        icon_map = DP6_LENS_ICONS
     else:
         st.subheader("🔥 Lentes com mais oportunidades no período")
         heatmap_lenses = list(LENSES)
@@ -970,9 +1237,14 @@ def page_analysis(selected_lenses: list[str]):
     period_suffix  = f" · {period}" if period else ""
     mode           = _detect_mode(results)
     is_investor    = mode == "investor"
-    all_lenses_ref = INVESTOR_LENSES if is_investor else LENSES
-    score_label    = "Score Buffett" if is_investor else "Score / 100"
-    mode_badge     = "📈 Modo Investidor" if is_investor else "🏢 Modo Fornecedor"
+    is_dp6         = mode == "dp6"
+    all_lenses_ref = lenses_for_mode(mode)
+    if is_investor:
+        score_label, mode_badge = "Score Buffett", "📈 Modo Investidor"
+    elif is_dp6:
+        score_label, mode_badge = "Temperatura DP6 / 100", "🤝 Modo DP6"
+    else:
+        score_label, mode_badge = "Score / 100", "🏢 Modo Fornecedor"
 
     if st.session_state.get("fallback_notice_for") == rec["id"]:
         st.info(
@@ -1014,6 +1286,16 @@ def page_analysis(selected_lenses: list[str]):
                 "da gestão e previsibilidade. Quanto maior, mais o negócio se aproxima do perfil de um "
                 "bom investimento de longo prazo. (No ranking da Visão Geral ele é convertido para 0–100.)"
             )
+        elif is_dp6:
+            st.markdown(
+                "A **Temperatura DP6** (0 a 100) mede o quão quente é a oportunidade comercial desta "
+                "empresa para a DP6. Para cada lente somamos:\n\n"
+                "- **+3 pontos** por cada *sinal para a DP6* (gancho comercial identificado)\n"
+                "- **+2 pontos** por cada *serviço DP6 recomendado* na lente de oportunidades\n"
+                "- **Prioridade:** Alta **+8**, Média **+4**\n"
+                "- **Tendência:** quente/alta **+2**, fria/queda **−1**\n\n"
+                "A soma é normalizada para 0–100. Quanto maior, mais quente a oportunidade de venda para a DP6."
+            )
         else:
             st.markdown(
                 "O **Score / 100** mede o **potencial de oportunidades B2B** da empresa. "
@@ -1045,6 +1327,10 @@ def page_analysis(selected_lenses: list[str]):
                 render_buffett_score_card(results[lens])
             else:
                 render_investor_lens_card(lens, results[lens], i)
+    elif is_dp6:
+        for i, lens in enumerate(lenses_to_show):
+            if lens in results:
+                render_dp6_lens_card(lens, results[lens], i)
     else:
         for i, lens in enumerate(lenses_to_show):
             if lens in results:
@@ -1058,6 +1344,13 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "fornecedor"):
         st.markdown(
             "Faça upload de **um ou mais PDFs** de uma empresa e extraia análise orientada a **decisão de investimento**: "
             "fundamentos, moat, gestão, riscos e Score Buffett."
+        )
+    elif mode == "dp6":
+        st.title("🤝 Market Intel — Visão DP6")
+        st.markdown(
+            "Faça upload de **um ou mais PDFs** do release de uma empresa-alvo e extraia **inteligência comercial "
+            "sob medida para a DP6**: panorama estratégico, dossiê de insights por categoria e as **oportunidades "
+            "concretas** mapeadas para os serviços da DP6."
         )
     else:
         st.title("📊 Market Intel — Visão Fornecedor")
@@ -1206,7 +1499,15 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "fornecedor"):
         lenses_to_show = [l for l in selected_lenses if l in results]
         st.subheader(f"Insights — {display_company}")
         for i, lens in enumerate(lenses_to_show):
-            render_lens_card(lens, results[lens], i)
+            if mode == "investor":
+                if lens == "Score Buffett":
+                    render_buffett_score_card(results[lens])
+                else:
+                    render_investor_lens_card(lens, results[lens], i)
+            elif mode == "dp6":
+                render_dp6_lens_card(lens, results[lens], i)
+            else:
+                render_lens_card(lens, results[lens], i)
 
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
@@ -1216,16 +1517,32 @@ def render_sidebar() -> tuple[list[str], str]:
         st.markdown("## 📊 Market Intel")
 
         # ── Mode toggle ──────────────────────────────────────────────────────
+        dp6_on = dp6_enabled()
+        # If DP6 was the active mode but the flag is now off, fall back gracefully.
+        if not dp6_on and st.session_state.get("mode") == "dp6":
+            st.session_state["mode"] = "fornecedor"
+
         st.markdown("**Modo de análise**")
+        mode_options = ["🏢 Fornecedor", "📈 Investidor"]
+        if dp6_on:
+            mode_options.append("🤝 DP6")
+        mode_to_label = {"fornecedor": "🏢 Fornecedor", "investor": "📈 Investidor", "dp6": "🤝 DP6"}
+        current_label = mode_to_label.get(st.session_state.get("mode", "fornecedor"), "🏢 Fornecedor")
+        current_index = mode_options.index(current_label) if current_label in mode_options else 0
         mode_choice = st.radio(
             "modo",
-            options=["🏢 Fornecedor", "📈 Investidor"],
-            index=1 if st.session_state.get("mode") == "investor" else 0,
+            options=mode_options,
+            index=current_index,
             horizontal=True,
             label_visibility="collapsed",
             key="mode_radio",
         )
-        new_mode = "investor" if "Investidor" in mode_choice else "fornecedor"
+        if "Investidor" in mode_choice:
+            new_mode = "investor"
+        elif "DP6" in mode_choice:
+            new_mode = "dp6"
+        else:
+            new_mode = "fornecedor"
         if new_mode != st.session_state.get("mode"):
             st.session_state["mode"] = new_mode
             # Reset to new analysis when mode changes
@@ -1258,8 +1575,9 @@ def render_sidebar() -> tuple[list[str], str]:
         current_page  = st.session_state.get("page", "nova_analise")
         mode          = st.session_state.get("mode", "fornecedor")
         is_investor   = mode == "investor"
-        active_lenses = INVESTOR_LENSES if is_investor else LENSES
-        active_icons  = INVESTOR_LENS_ICONS if is_investor else LENS_ICONS
+        is_dp6        = mode == "dp6"
+        active_lenses = lenses_for_mode(mode)
+        active_icons  = icons_for_mode(mode)
         selected_lenses: list[str] = list(active_lenses)
 
         if current_page != "visao_geral":
@@ -1277,7 +1595,7 @@ def render_sidebar() -> tuple[list[str], str]:
 
         # History
         all_analyses = list_analyses(mode)
-        mode_label = "Investidor" if is_investor else "Fornecedor"
+        mode_label = "Investidor" if is_investor else ("DP6" if is_dp6 else "Fornecedor")
         if all_analyses:
             st.markdown(f"**🗂️ Empresas analisadas** · {mode_label}")
             for rec in all_analyses:
