@@ -634,7 +634,7 @@ def analyze_with_claude(
         if i > 0:
             time.sleep(1)  # avoid rate-limiting between consecutive calls
         prompt = build_ext_prompt(text, filename, company, period)
-        raw = _call(4000, [{"role": "user", "content": prompt}])
+        raw = _call(8192, [{"role": "user", "content": prompt}])
         sections = _parse_md_sections(raw, active_lenses)
         per_doc_sections.append(sections)
         filenames.append(filename)
@@ -647,7 +647,7 @@ def analyze_with_claude(
         return per_doc_sections[0]
 
     prompt = build_cons_prompt(per_doc_sections, filenames, company, period)
-    raw = _call(5000, [{"role": "user", "content": prompt}])
+    raw = _call(8192, [{"role": "user", "content": prompt}])
     return _parse_md_sections(raw, active_lenses)
 
 
@@ -675,6 +675,12 @@ def score_color(score: float) -> str:
         return "#ef4444"
 
 
+def _md_escape_dollars(text: str) -> str:
+    """Escape '$' so Streamlit does not treat 'R$ ... $' spans as LaTeX math.
+    Brazilian financial text uses R$ / US$ heavily; unescaped pairs render as formulas."""
+    return text.replace("$", "\\$")
+
+
 def render_lens_card(lens_name: str, raw_data, card_index: int):
     """Render a fornecedor lens card. raw_data may be a markdown string (new) or dict (legacy)."""
     md_text    = _compat_md(raw_data)
@@ -695,7 +701,7 @@ def render_lens_card(lens_name: str, raw_data, card_index: int):
         st.markdown(trend_html, unsafe_allow_html=True)
 
     if body:
-        st.markdown(body)
+        st.markdown(_md_escape_dollars(body))
     st.divider()
 
 
@@ -718,7 +724,7 @@ def render_investor_lens_card(lens_name: str, raw_data, card_index: int):
         st.markdown(trend_html, unsafe_allow_html=True)
 
     if body:
-        st.markdown(body)
+        st.markdown(_md_escape_dollars(body))
     st.divider()
 
 
@@ -753,7 +759,7 @@ def render_buffett_score_card(raw_data):
 
     st.progress(pct)
     if body:
-        st.markdown(body)
+        st.markdown(_md_escape_dollars(body))
     st.divider()
 
 
