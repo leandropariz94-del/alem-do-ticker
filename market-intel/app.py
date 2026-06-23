@@ -571,8 +571,11 @@ def analyze_with_claude(
     build_ext_prompt  = _build_investor_extraction_prompt   if is_investor else _build_extraction_prompt
     build_cons_prompt = _build_investor_consolidation_prompt if is_investor else _build_consolidation_prompt
 
-    def _call(max_tokens: int, messages: list, retries: int = 3) -> str:
-        """Call Claude with exponential-backoff retry on transient 5xx errors."""
+    def _call(max_tokens: int, messages: list, retries: int = 4) -> str:
+        """Call Claude with exponential-backoff retry.
+        529 overloaded → longer waits (10s, 20s, 40s).
+        Other 5xx     → shorter waits (3s, 6s, 12s).
+        """
         for attempt in range(retries):
             try:
                 msg = client.messages.create(
@@ -582,10 +585,21 @@ def analyze_with_claude(
                 )
                 return msg.content[0].text
             except anthropic.APIStatusError as e:
-                if e.status_code >= 500 and attempt < retries - 1:
-                    time.sleep(2 ** attempt)  # 1s, 2s, 4s …
-                    continue
-                raise
+                is_last = attempt >= retries - 1
+                if is_last:
+                    raise
+                if e.status_code == 529:
+                    wait = 10 * (2 ** attempt)   # 10s, 20s, 40s
+                elif e.status_code >= 500:
+                    wait = 3 * (2 ** attempt)    # 3s, 6s, 12s
+                else:
+                    raise
+                if progress_callback:
+                    progress_callback(
+                        -1, -1,
+                        f"⏳ Servidor sobrecarregado — aguardando {wait}s antes de tentar novamente (tentativa {attempt + 2}/{retries})…",
+                    )
+                time.sleep(wait)
         raise RuntimeError("Todas as tentativas falharam.")
 
     # ── Phase 1: per-PDF markdown extraction ─────────────────────────────────
@@ -982,8 +996,11 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "fornecedor"):
             status_text   = st.empty()
 
             def on_progress(current: int, total: int, filename: str):
-                if current < total:
-                    pct = current / (total + 1)   # +1 reserves space for consolidation step
+                if current == -1:
+                    # retry status message passed from _call()
+                    status_text.markdown(f"🔄 {filename}")
+                elif current < total:
+                    pct = current / (total + 1)
                     progress_bar.progress(pct)
                     status_text.markdown(
                         f"**Fase 1 — Extração** · arquivo {current + 1}/{total}: `{filename}`"
@@ -999,10 +1016,23 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "fornecedor"):
                     progress_callback=on_progress,
                     mode=mode,
                 )
-            except json.JSONDecodeError as e:
+            except anthropic.APIStatusError as e:
                 progress_bar.empty()
                 status_text.empty()
-                st.error(f"Erro ao interpretar resposta da IA: {e}")
+                if e.status_code == 529:
+                    st.error(
+                        "⚠️ **Servidor da Anthropic sobrecarregado (erro 529).** "
+                        "Isso é uma limitação temporária do lado da API — não é um problema no seu arquivo. "
+                        "Aguarde alguns minutos e tente novamente. Se persistir, tente com apenas 1 PDF."
+                    )
+                elif e.status_code == 500:
+                    st.error(
+                        "⚠️ **Erro interno no servidor da Anthropic (erro 500).** "
+                        "Pode ser quota diária esgotada ou instabilidade temporária. "
+                        "Tente novamente mais tarde ou com menos PDFs."
+                    )
+                else:
+                    st.error(f"Erro na API da Anthropic (código {e.status_code}): {e.message}")
                 return
             except Exception as e:
                 progress_bar.empty()
