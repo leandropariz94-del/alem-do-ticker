@@ -1,2 +1,3 @@
 - [Anthropic proxy 529 / model availability](anthropic-proxy-529.md) — Replit Anthropic proxy returns 529 on Opus/Sonnet during peak load; Haiku stays available. Use a model fallback chain.
 - [Streamlit markdown gotchas](streamlit-markdown-gotchas.md) — st.markdown treats `$...$` as LaTeX (breaks R$/US$ text); low max_tokens truncates multi-section LLM output.
+- [Market Intel app structure](market-intel-app-structure.md) — served by `mockup-sandbox: Start application` workflow (not plain `Start application`); `mode` column separates Fornecedor/Investidor; no preview screenshot path.

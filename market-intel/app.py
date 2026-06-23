@@ -76,6 +76,16 @@ def init_db():
             score         REAL    NOT NULL DEFAULT 0.0
         )
     """)
+    # Migration: add `mode` column and backfill from existing results.
+    cols = [r[1] for r in con.execute("PRAGMA table_info(analyses)").fetchall()]
+    if "mode" not in cols:
+        con.execute("ALTER TABLE analyses ADD COLUMN mode TEXT NOT NULL DEFAULT 'fornecedor'")
+        for rid, rj in con.execute("SELECT id, results_json FROM analyses").fetchall():
+            try:
+                detected = _detect_mode(json.loads(rj))
+            except Exception:
+                detected = "fornecedor"
+            con.execute("UPDATE analyses SET mode = ? WHERE id = ?", (detected, rid))
     con.commit()
     con.close()
 
@@ -139,8 +149,8 @@ def save_analysis(company: str, period: str, files_count: int, results: dict) ->
     score = compute_investor_score(results) if mode == "investor" else compute_opportunity_score(results)
     con = sqlite3.connect(DB_PATH)
     cur = con.execute(
-        "INSERT INTO analyses (company, period, created_at, files_count, results_json, score) VALUES (?, ?, ?, ?, ?, ?)",
-        (company, period, datetime.now().isoformat(timespec="seconds"), files_count, json.dumps(results, ensure_ascii=False), score),
+        "INSERT INTO analyses (company, period, created_at, files_count, results_json, score, mode) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (company, period, datetime.now().isoformat(timespec="seconds"), files_count, json.dumps(results, ensure_ascii=False), score, mode),
     )
     row_id = cur.lastrowid
     con.commit()
@@ -148,21 +158,33 @@ def save_analysis(company: str, period: str, files_count: int, results: dict) ->
     return row_id
 
 
-def list_analyses() -> list[dict]:
+def list_analyses(mode: str | None = None) -> list[dict]:
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
-    rows = con.execute(
-        "SELECT id, company, period, created_at, files_count, score FROM analyses ORDER BY created_at DESC"
-    ).fetchall()
+    if mode:
+        rows = con.execute(
+            "SELECT id, company, period, created_at, files_count, score, mode FROM analyses WHERE mode = ? ORDER BY created_at DESC",
+            (mode,),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT id, company, period, created_at, files_count, score, mode FROM analyses ORDER BY created_at DESC"
+        ).fetchall()
     con.close()
     return [dict(r) for r in rows]
 
 
-def list_periods() -> list[str]:
+def list_periods(mode: str | None = None) -> list[str]:
     con = sqlite3.connect(DB_PATH)
-    rows = con.execute(
-        "SELECT DISTINCT period FROM analyses WHERE period != '' ORDER BY period DESC"
-    ).fetchall()
+    if mode:
+        rows = con.execute(
+            "SELECT DISTINCT period FROM analyses WHERE period != '' AND mode = ? ORDER BY period DESC",
+            (mode,),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT DISTINCT period FROM analyses WHERE period != '' ORDER BY period DESC"
+        ).fetchall()
     con.close()
     return [r[0] for r in rows]
 
@@ -186,13 +208,19 @@ def delete_analysis(analysis_id: int):
     con.close()
 
 
-def analyses_for_period(period: str) -> list[dict]:
+def analyses_for_period(period: str, mode: str | None = None) -> list[dict]:
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
-    rows = con.execute(
-        "SELECT id, company, period, created_at, files_count, score, results_json FROM analyses WHERE period = ? ORDER BY score DESC",
-        (period,),
-    ).fetchall()
+    if mode:
+        rows = con.execute(
+            "SELECT id, company, period, created_at, files_count, score, results_json, mode FROM analyses WHERE period = ? AND mode = ? ORDER BY score DESC",
+            (period, mode),
+        ).fetchall()
+    else:
+        rows = con.execute(
+            "SELECT id, company, period, created_at, files_count, score, results_json, mode FROM analyses WHERE period = ? ORDER BY score DESC",
+            (period,),
+        ).fetchall()
     con.close()
     result = []
     for r in rows:
@@ -766,24 +794,55 @@ def render_buffett_score_card(raw_data):
 # ─── Pages ────────────────────────────────────────────────────────────────────
 
 def page_overview():
-    st.title("📈 Visão Geral — Ranking de Oportunidades")
+    mode        = st.session_state.get("mode", "fornecedor")
+    is_investor = mode == "investor"
+    title       = "📈 Visão Geral — Ranking de Investimentos" if is_investor else "📈 Visão Geral — Ranking de Oportunidades"
+    mode_badge  = "📈 Modo Investidor" if is_investor else "🏢 Modo Fornecedor"
+    st.title(title)
+    st.caption(f"{mode_badge} · mostrando apenas as análises deste modo")
 
-    periods = list_periods()
-    if not periods:
-        st.info("Nenhuma análise salva ainda. Faça upload de um release para começar.")
+    with st.expander("❓ Como o score é calculado?"):
+        if is_investor:
+            st.markdown(
+                "O score do **Modo Investidor** é o **Score Buffett** (0 a 10), convertido para a escala "
+                "0–100 (nota × 10). Ele resume a qualidade do negócio segundo os critérios de Warren Buffett "
+                "— vantagem competitiva durável, consistência de resultados, qualidade da gestão e previsibilidade. "
+                "Quanto maior, mais o negócio se aproxima do perfil de um bom investimento de longo prazo."
+            )
+        else:
+            st.markdown(
+                "O score do **Modo Fornecedor** mede o **potencial de oportunidades B2B** da empresa (0 a 100). "
+                "Para cada lente somamos:\n\n"
+                "- **+3 pontos** por cada *oportunidade para fornecedores* identificada\n"
+                "- **Tendência:** alta/crescimento **+2**, transformação/mudança **+1**, queda/redução **−2**\n"
+                "- **−0,5 ponto** por cada *alerta* (risco/cautela)\n\n"
+                "A soma de todas as lentes é normalizada para a escala 0–100. "
+                "Quanto maior, mais portas abertas para vender produtos e serviços para a empresa."
+            )
+
+    periods = list_periods(mode)
+    all_analyses = list_analyses(mode)
+    if not all_analyses:
+        label = "Investidor" if is_investor else "Fornecedor"
+        st.info(f"Nenhuma análise salva no **Modo {label}** ainda. Faça uma nova análise para começar.")
         return
 
-    all_analyses = list_analyses()
     all_periods_option = "Todos os períodos"
     period_options = [all_periods_option] + periods
     selected_period = st.selectbox("Selecione o período", period_options)
 
     if selected_period == all_periods_option:
         rows = sorted(all_analyses, key=lambda x: x["score"], reverse=True)
+        loaded = []
         for r in rows:
-            r["results"] = load_analysis(r["id"])["results"]
+            full = load_analysis(r["id"])
+            if full is None:
+                continue
+            r["results"] = full["results"]
+            loaded.append(r)
+        rows = loaded
     else:
-        rows = analyses_for_period(selected_period)
+        rows = analyses_for_period(selected_period, mode)
 
     if not rows:
         st.warning(f"Nenhuma análise encontrada para o período **{selected_period}**.")
@@ -800,7 +859,7 @@ def page_overview():
         period_lbl = f" · {period}" if period else ""
         date_lbl  = rec["created_at"][:10]
 
-        col_rank, col_info, col_bar, col_score, col_btn = st.columns([0.4, 2.5, 3, 0.8, 1.2])
+        col_rank, col_info, col_bar, col_score, col_btn, col_del = st.columns([0.4, 2.3, 2.7, 0.8, 1.1, 0.9])
 
         with col_rank:
             medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"#{rank}")
@@ -824,10 +883,12 @@ def page_overview():
             st.markdown("</div>", unsafe_allow_html=True)
 
         with col_score:
+            score_val = f"{score / 10:.1f}" if is_investor else f"{score:.0f}"
+            score_max = "/ 10" if is_investor else "/ 100"
             st.markdown(
                 f'<div style="text-align:center;padding-top:6px;">'
-                f'<div style="font-size:1.4rem;font-weight:800;color:{s_color};">{score:.0f}</div>'
-                f'<div style="font-size:0.7rem;color:#94a3b8;">/ 100</div>'
+                f'<div style="font-size:1.4rem;font-weight:800;color:{s_color};">{score_val}</div>'
+                f'<div style="font-size:0.7rem;color:#94a3b8;">{score_max}</div>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
@@ -840,16 +901,39 @@ def page_overview():
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
+        with col_del:
+            st.markdown("<div style='padding-top:8px;'>", unsafe_allow_html=True)
+            if st.session_state.get("ov_confirm_del") == rec["id"]:
+                if st.button("Confirmar", key=f"ov_delok_{rec['id']}", type="primary", use_container_width=True):
+                    delete_analysis(rec["id"])
+                    st.session_state.pop("ov_confirm_del", None)
+                    st.rerun()
+            else:
+                if st.button("🗑️", key=f"ov_del_{rec['id']}", use_container_width=True, help="Excluir esta análise"):
+                    st.session_state["ov_confirm_del"] = rec["id"]
+                    st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+
         st.divider()
 
-    # Lense heatmap — top opportunities across companies
-    st.subheader("🔥 Lentes com mais oportunidades no período")
-    lens_op_count: dict[str, int] = {l: 0 for l in LENSES}
+    # Lens heatmap — top lenses across companies (mode-aware)
+    if is_investor:
+        st.subheader("🔥 Lentes com mais insights no período")
+        heatmap_lenses = [l for l in INVESTOR_LENSES if l != "Score Buffett"]
+        bullet_label = "Insights de Investimento"
+        icon_map = INVESTOR_LENS_ICONS
+    else:
+        st.subheader("🔥 Lentes com mais oportunidades no período")
+        heatmap_lenses = list(LENSES)
+        bullet_label = "Oportunidades para Fornecedores"
+        icon_map = LENS_ICONS
+
+    lens_op_count: dict[str, int] = {l: 0 for l in heatmap_lenses}
     for rec in rows:
         results = rec.get("results") or {}
-        for lens in LENSES:
+        for lens in heatmap_lenses:
             md = _compat_md(results.get(lens, ""))
-            lens_op_count[lens] += _count_bullets(md, "Oportunidades para Fornecedores")
+            lens_op_count[lens] += _count_bullets(md, bullet_label)
 
     sorted_lenses = sorted(lens_op_count.items(), key=lambda x: x[1], reverse=True)
     max_count = max(v for _, v in sorted_lenses) if sorted_lenses else 1
@@ -857,7 +941,7 @@ def page_overview():
     h1, h2 = st.columns(2)
     for i, (lens, count) in enumerate(sorted_lenses):
         col = h1 if i % 2 == 0 else h2
-        icon = LENS_ICONS.get(lens, "📌")
+        icon = icon_map.get(lens, "📌")
         pct = count / max_count if max_count > 0 else 0
         with col:
             st.markdown(
@@ -921,6 +1005,25 @@ def page_analysis(selected_lenses: list[str]):
             if "loaded_analysis_id" in st.session_state:
                 del st.session_state["loaded_analysis_id"]
             st.rerun()
+
+    with st.expander("❓ Como o score é calculado?"):
+        if is_investor:
+            st.markdown(
+                "O **Score Buffett** vai de 0 a 10 e resume a qualidade do negócio segundo os critérios "
+                "de Warren Buffett — vantagem competitiva durável, consistência de resultados, qualidade "
+                "da gestão e previsibilidade. Quanto maior, mais o negócio se aproxima do perfil de um "
+                "bom investimento de longo prazo. (No ranking da Visão Geral ele é convertido para 0–100.)"
+            )
+        else:
+            st.markdown(
+                "O **Score / 100** mede o **potencial de oportunidades B2B** da empresa. "
+                "Para cada lente somamos:\n\n"
+                "- **+3 pontos** por cada *oportunidade para fornecedores* identificada\n"
+                "- **Tendência:** alta/crescimento **+2**, transformação/mudança **+1**, queda/redução **−2**\n"
+                "- **−0,5 ponto** por cada *alerta* (risco/cautela)\n\n"
+                "A soma de todas as lentes é normalizada para a escala 0–100. "
+                "Quanto maior, mais portas abertas para vender produtos e serviços para a empresa."
+            )
 
     lenses_to_show = [l for l in selected_lenses if l in results]
     if not lenses_to_show:
@@ -1129,6 +1232,8 @@ def render_sidebar() -> tuple[list[str], str]:
             st.session_state["page"] = "nova_analise"
             if "loaded_analysis_id" in st.session_state:
                 del st.session_state["loaded_analysis_id"]
+            st.session_state.pop("ov_confirm_del", None)
+            st.session_state.pop("hist_confirm_del", None)
             st.rerun()
 
         st.divider()
@@ -1137,10 +1242,14 @@ def render_sidebar() -> tuple[list[str], str]:
             st.session_state["page"] = "nova_analise"
             if "loaded_analysis_id" in st.session_state:
                 del st.session_state["loaded_analysis_id"]
+            st.session_state.pop("ov_confirm_del", None)
+            st.session_state.pop("hist_confirm_del", None)
             st.rerun()
 
         if st.button("📈 Visão Geral", use_container_width=True):
             st.session_state["page"] = "visao_geral"
+            st.session_state.pop("ov_confirm_del", None)
+            st.session_state.pop("hist_confirm_del", None)
             st.rerun()
 
         st.divider()
@@ -1167,14 +1276,16 @@ def render_sidebar() -> tuple[list[str], str]:
             st.divider()
 
         # History
-        all_analyses = list_analyses()
+        all_analyses = list_analyses(mode)
+        mode_label = "Investidor" if is_investor else "Fornecedor"
         if all_analyses:
-            st.markdown("**🗂️ Empresas analisadas**")
+            st.markdown(f"**🗂️ Empresas analisadas** · {mode_label}")
             for rec in all_analyses:
                 company  = rec["company"] or "Empresa"
                 period   = rec["period"]
                 score    = rec["score"]
                 s_color  = score_color(score)
+                score_txt = f"{score / 10:.1f}" if is_investor else f"{score:.0f}"
                 label    = f"{company} · {period}" if period else company
                 is_active = st.session_state.get("loaded_analysis_id") == rec["id"]
 
@@ -1183,7 +1294,7 @@ def render_sidebar() -> tuple[list[str], str]:
                     f'<div style="{btn_style}border-radius:8px;padding:2px 0;margin-bottom:2px;">',
                     unsafe_allow_html=True,
                 )
-                col_btn, col_score = st.sidebar.columns([3, 1])
+                col_btn, col_score, col_del = st.sidebar.columns([2.6, 0.7, 0.7])
                 with col_btn:
                     if st.button(label, key=f"hist_{rec['id']}", use_container_width=True):
                         st.session_state["page"] = "analise_detalhe"
@@ -1191,12 +1302,25 @@ def render_sidebar() -> tuple[list[str], str]:
                         st.rerun()
                 with col_score:
                     st.markdown(
-                        f'<div style="text-align:right;padding-top:6px;font-size:0.8rem;font-weight:700;color:{s_color};">{score:.0f}</div>',
+                        f'<div style="text-align:right;padding-top:6px;font-size:0.8rem;font-weight:700;color:{s_color};">{score_txt}</div>',
                         unsafe_allow_html=True,
                     )
+                with col_del:
+                    if st.session_state.get("hist_confirm_del") == rec["id"]:
+                        if st.button("✔️", key=f"hist_delok_{rec['id']}", use_container_width=True, help="Confirmar exclusão"):
+                            delete_analysis(rec["id"])
+                            st.session_state.pop("hist_confirm_del", None)
+                            if st.session_state.get("loaded_analysis_id") == rec["id"]:
+                                st.session_state.pop("loaded_analysis_id", None)
+                                st.session_state["page"] = "nova_analise"
+                            st.rerun()
+                    else:
+                        if st.button("🗑️", key=f"hist_del_{rec['id']}", use_container_width=True, help="Excluir esta análise"):
+                            st.session_state["hist_confirm_del"] = rec["id"]
+                            st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
         else:
-            st.caption("Nenhuma análise salva ainda.")
+            st.caption(f"Nenhuma análise salva no Modo {mode_label} ainda.")
 
         st.divider()
         st.caption("**Market Intel** · Powered by Claude")
