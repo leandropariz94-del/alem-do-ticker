@@ -688,9 +688,11 @@ def analyze_with_claude(
     # modelo datado fique sobrecarregado (529) durante picos de uso.
     MODEL_CHAIN = ["claude-haiku-4-5-20251001", "claude-haiku-4-5"]
 
-    # Resposta limitada a 2000 tokens por chamada para reduzir custo. Saídas
-    # longas (especialmente DP6, com 7 seções verbosas) podem ser truncadas.
-    out_max_tokens = 2000
+    # Investidor: 2000 tokens por chamada para reduzir custo (modo público).
+    # DP6: 16000 tokens — suas 7 seções verbosas (a última, "Oportunidades para
+    # a DP6", tem 3 sub-blocos) truncavam abaixo disso, deixando o último card
+    # em branco. DP6 é o modo privado, então a qualidade vem antes do custo.
+    out_max_tokens = 16000 if mode == "dp6" else 2000
 
     def _call(max_tokens: int, messages: list, retries: int = 2) -> str:
         """Call Claude with a model fallback chain + exponential-backoff retry.
