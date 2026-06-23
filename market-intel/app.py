@@ -290,11 +290,32 @@ def analyses_for_period(period: str, mode: str | None = None) -> list[dict]:
 
 # ─── PDF / Claude ─────────────────────────────────────────────────────────────
 
+# Limite de caracteres enviados à API por PDF. Os releases concentram a
+# narrativa estratégica (destaques, mensagem da gestão, guidance) no início e
+# no meio; o final costuma ser tabela repetitiva e nota de rodapé. Mantemos o
+# início e um trecho do meio e descartamos o fim para reduzir o custo por token.
+PDF_CHAR_LIMIT = 50_000
+
+
+def _trim_to_strategic_window(text: str, limit: int = PDF_CHAR_LIMIT) -> str:
+    if len(text) <= limit:
+        return text
+    sep = "\n\n[... trecho intermediário omitido para reduzir custo ...]\n\n"
+    budget = max(0, limit - len(sep))
+    head_len = int(budget * 0.7)          # priorize o início
+    mid_len  = budget - head_len          # e um trecho do meio
+    head = text[:head_len]
+    midpoint = len(text) // 2
+    start = max(head_len, midpoint - mid_len // 2)
+    middle = text[start:start + mid_len]
+    return head + sep + middle
+
+
 def extract_text_from_pdf(pdf_bytes: bytes, filename: str = "") -> str:
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     text = "".join(page.get_text() for page in doc)
     doc.close()
-    return text
+    return _trim_to_strategic_window(text)
 
 
 def _context_header(company: str, period: str) -> str:
@@ -453,7 +474,7 @@ REGRAS:
 - 2-4 bullets por subseção; omita sem dados
 
 DOCUMENTO — {filename}:
-{pdf_text[:8000]}
+{pdf_text}
 """
 
 
@@ -596,7 +617,7 @@ REGRAS:
 - Seja específico; use apenas dados presentes no documento; conecte sempre os achados aos serviços da DP6
 
 DOCUMENTO — {filename}:
-{pdf_text[:8000]}
+{pdf_text}
 """
 
 
@@ -662,15 +683,14 @@ def analyze_with_claude(
         build_ext_prompt  = _build_investor_extraction_prompt
         build_cons_prompt = _build_investor_consolidation_prompt
 
-    # Model fallback chain: try the higher-quality model first, then fall back
-    # to lighter models that retain capacity when the larger ones are overloaded
-    # (529). Haiku almost always stays available during Anthropic peak load.
-    MODEL_CHAIN = ["claude-sonnet-4-6", "claude-haiku-4-5"]
+    # Modelo: Haiku 4.5 (datado) como principal — muito mais barato e suficiente
+    # para extração estruturada. Mantemos o alias Haiku como fallback caso o
+    # modelo datado fique sobrecarregado (529) durante picos de uso.
+    MODEL_CHAIN = ["claude-haiku-4-5-20251001", "claude-haiku-4-5"]
 
-    # DP6 mode produces 7 verbose sections (the last, "Oportunidades para a DP6",
-    # carries 3 sub-blocks); 8192 tokens truncated it mid-output, leaving the
-    # final card blank. Give DP6 more headroom; other modes keep the default.
-    out_max_tokens = 16000 if mode == "dp6" else 8192
+    # Resposta limitada a 2000 tokens por chamada para reduzir custo. Saídas
+    # longas (especialmente DP6, com 7 seções verbosas) podem ser truncadas.
+    out_max_tokens = 2000
 
     def _call(max_tokens: int, messages: list, retries: int = 2) -> str:
         """Call Claude with a model fallback chain + exponential-backoff retry.
