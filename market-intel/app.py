@@ -255,8 +255,9 @@ def _score_for_mode(mode: str, results: dict) -> float:
     return compute_opportunity_score(results)
 
 
-def save_analysis(company: str, period: str, files_count: int, results: dict) -> int:
-    mode = _detect_mode(results)
+def save_analysis(company: str, period: str, files_count: int, results: dict, mode: str | None = None) -> int:
+    if mode is None:
+        mode = _detect_mode(results)
     score = _score_for_mode(mode, results)
     con = sqlite3.connect(DB_PATH)
     cur = con.execute(
@@ -1358,6 +1359,12 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "fornecedor"):
         st.markdown(
             "Faça upload de **um ou mais PDFs** de uma empresa brasileira e extraia inteligência estratégica consolidada em 9 lentes de mercado."
         )
+
+    _mods = "🤝 DP6, 🏢 Fornecedor e 📈 Investidor" if dp6_enabled() else "🏢 Fornecedor e 📈 Investidor"
+    st.caption(
+        f"💡 Um único upload roda automaticamente os módulos **{_mods}** sobre os mesmos PDFs — "
+        "o resultado fica salvo em todos. Você não precisa subir os arquivos mais de uma vez."
+    )
     st.divider()
 
     col_company, col_period = st.columns([2, 1])
@@ -1404,7 +1411,7 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "fornecedor"):
         label    = company_name or "empresa"
         per_lbl  = f" · {period}" if period else ""
         if st.button(f"🚀 Analisar {label}{per_lbl} com Claude", type="primary", use_container_width=True):
-            # ── Step 1: extract text from all PDFs ──────────────────────────
+            # ── Step 1: extract text from all PDFs (uma única vez) ──────────
             files_and_texts = []
             with st.spinner(f"Extraindo texto de {len(uploaded_files)} arquivo(s)..."):
                 for f in uploaded_files:
@@ -1420,40 +1427,68 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "fornecedor"):
 
             total_files = len(files_and_texts)
             total_chars = sum(len(t) for _, t in files_and_texts)
+
+            # ── Quais módulos rodar: os mesmos PDFs alimentam todos os modos.
+            # DP6 só entra quando a flag está ligada (escondido ao ir a mercado).
+            modes_to_run: list[tuple[str, str]] = []
+            if dp6_enabled():
+                modes_to_run.append(("dp6", "🤝 DP6"))
+            modes_to_run.append(("fornecedor", "🏢 Fornecedor"))
+            modes_to_run.append(("investor", "📈 Investidor"))
+            n_modes = len(modes_to_run)
+
             st.info(
                 f"**{total_files} arquivo(s)** · **{total_chars:,} chars** extraídos. "
-                f"Processando em {total_files} chamada(s) separada(s) + consolidação..."
+                f"Rodando **{n_modes} módulos** ({', '.join(lbl for _, lbl in modes_to_run)}) "
+                f"sobre os mesmos PDFs — pode levar alguns minutos."
             )
 
-            # ── Step 2: two-phase Claude analysis with live progress ────────
-            progress_bar  = st.progress(0)
-            status_text   = st.empty()
+            # ── Step 2: roda cada modo em sequência, com progresso ao vivo ──
+            module_header   = st.empty()
+            progress_bar    = st.progress(0)
+            status_text     = st.empty()
+            display_company = company_name or (
+                uploaded_files[0].name.replace(".pdf", "") if len(uploaded_files) == 1 else "Empresa"
+            )
 
-            def on_progress(current: int, total: int, filename: str):
-                if current == -1:
-                    # retry status message passed from _call()
-                    status_text.markdown(f"🔄 {filename}")
-                elif current < total:
-                    pct = current / (total + 1)
-                    progress_bar.progress(pct)
-                    status_text.markdown(
-                        f"**Fase 1 — Extração** · arquivo {current + 1}/{total}: `{filename}`"
-                    )
-                else:
-                    progress_bar.progress(total / (total + 1))
-                    step_label = "consolidando os resultados..." if total > 1 else "gerando análise completa..."
-                    status_text.markdown(f"**Fase 2 —** {step_label}")
+            def make_on_progress(mode_idx: int):
+                base = mode_idx / n_modes
+                def on_progress(current: int, total: int, filename: str):
+                    if current == -1:
+                        # retry status message passed from _call()
+                        status_text.markdown(f"🔄 {filename}")
+                        return
+                    if total <= 0:
+                        frac = 0.0
+                    elif current < total:
+                        frac = current / (total + 1)
+                        status_text.markdown(
+                            f"**Fase 1 — Extração** · arquivo {current + 1}/{total}: `{filename}`"
+                        )
+                    else:
+                        frac = total / (total + 1)
+                        step_label = "consolidando os resultados..." if total > 1 else "gerando análise completa..."
+                        status_text.markdown(f"**Fase 2 —** {step_label}")
+                    progress_bar.progress(min(1.0, base + frac / n_modes))
+                return on_progress
 
-            st.session_state["_models_used"] = set()
+            saved_ids: dict[str, int] = {}
+            models_by_mode: dict[str, set] = {}
             try:
-                results = analyze_with_claude(
-                    files_and_texts, company_name, period,
-                    progress_callback=on_progress,
-                    mode=mode,
-                )
+                for mi, (m, mlabel) in enumerate(modes_to_run):
+                    module_header.markdown(f"#### Analisando módulo {mlabel} — {mi + 1} de {n_modes}")
+                    st.session_state["_models_used"] = set()  # reset per mode
+                    results = analyze_with_claude(
+                        files_and_texts, company_name, period,
+                        progress_callback=make_on_progress(mi),
+                        mode=m,
+                    )
+                    models_by_mode[m] = set(st.session_state.get("_models_used", set()))
+                    saved_ids[m] = save_analysis(display_company, period, total_files, results, mode=m)
             except anthropic.APIStatusError as e:
                 progress_bar.empty()
                 status_text.empty()
+                module_header.empty()
                 if e.status_code == 529:
                     st.error(
                         "⚠️ **Servidor da Anthropic sobrecarregado (erro 529).** "
@@ -1472,23 +1507,24 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "fornecedor"):
             except Exception as e:
                 progress_bar.empty()
                 status_text.empty()
+                module_header.empty()
                 st.error(f"Erro na análise: {e}")
                 return
 
             progress_bar.progress(1.0)
             status_text.empty()
+            module_header.empty()
 
-            display_company = company_name or (
-                uploaded_files[0].name.replace(".pdf", "") if len(uploaded_files) == 1 else "Empresa"
-            )
-            analysis_id = save_analysis(display_company, period, len(files_and_texts), results)
+            # Abre o resultado do módulo atualmente ativo na barra lateral.
+            target_id = saved_ids.get(mode) or next(iter(saved_ids.values()))
 
-            models_used = st.session_state.get("_models_used", set())
+            # Notice based only on the module the user will land on, not the aggregate.
+            models_used = models_by_mode.get(mode, set())
             if "claude-haiku-4-5" in models_used and "claude-sonnet-4-6" not in models_used:
-                st.session_state["fallback_notice_for"] = analysis_id
+                st.session_state["fallback_notice_for"] = target_id
 
             st.session_state["page"] = "analise_detalhe"
-            st.session_state["loaded_analysis_id"] = analysis_id
+            st.session_state["loaded_analysis_id"] = target_id
             st.rerun()
 
     # If there's a fresh result in session (legacy path), show it

@@ -22,6 +22,11 @@ description: How the market-intel Streamlit app is served and how it stores/sepa
 - **DP6 needs more output tokens:** `analyze_with_claude` sets `out_max_tokens = 16000 if mode=="dp6" else 8192`. **Why:** DP6's 7 verbose sections (the last, Oportunidades, has 3 sub-blocks) truncated at 8192 — the final lens card rendered blank because stored content was literally `**Tendência:** Qu`. Any new verbose mode/section needs the same headroom check.
 - DP6 lens cards (`render_dp6_lens_card`) intentionally render NO trend badge — long PT trend labels ("Em transformação", "Aceleração") broke the narrow badge column. The `**Tendência:**` line is still stripped from the body. `render_trend_badge` is still used by fornecedor/investor cards.
 
+## One upload → all modules
+- The "Nova análise" button extracts PDF text ONCE, then loops `analyze_with_claude` over every enabled mode (dp6 only if `dp6_enabled()`, then fornecedor, then investor) on the same `files_and_texts`, saving one DB row per mode via `save_analysis(..., mode=m)`. After all modes finish it opens the detail page for the currently-active sidebar mode (`saved_ids.get(mode)`). **Why:** users wanted one upload to populate all three modules instead of uploading 3×. Cost: ~70s per mode → a single click can take a few minutes.
+- `save_analysis` takes an optional explicit `mode` (falls back to `_detect_mode`). The fallback-model notice is tracked per mode (`models_by_mode`) and only fires for the landing module — don't revert to the shared `_models_used` aggregate or the notice misfires across modes.
+- Error handling aborts on the first mode that hard-fails (after the model fallback chain), leaving earlier modes already saved; retrying re-runs all modes and can create duplicate rows. Acceptable for now.
+
 ## Score scales
 - Stored 0–100 for all modes. Displayed: investor `/10` (Buffett nota×10 stored, shown as 0–10 because users think 0–10); fornecedor & dp6 `/100`. `score_color` thresholds 70/45.
 - `compute_dp6_score` ("temperatura comercial"): per-lens "Sinais para a DP6" bullets capped at 3 (×2.5), opportunity "Serviços DP6 Recomendados" capped at 5 (×1.5), Prioridade Alta +10 / Média +5, trend ±1.5, normalized by /80 then clamped 0–100. **Why:** caps + denominator-above-max keep discrimination at the top (typical ~40-50, strong ~80-90) instead of saturating at 100.
