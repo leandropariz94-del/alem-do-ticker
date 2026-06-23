@@ -926,14 +926,24 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "fornecedor"):
             help="Trimestre ou ano de referência.",
         )
 
+    PDF_LIMIT = 3
+
     uploaded_files = st.file_uploader(
-        "Selecione os PDFs do release trimestral (pode enviar vários)",
+        f"Selecione os PDFs do release trimestral (máximo {PDF_LIMIT} arquivos)",
         type=["pdf"],
         accept_multiple_files=True,
-        help="O conteúdo de todos os arquivos será consolidado em uma análise única.",
+        help=f"Máximo {PDF_LIMIT} PDFs por análise. O conteúdo será consolidado em uma análise única.",
     )
 
     if uploaded_files:
+        if len(uploaded_files) > PDF_LIMIT:
+            st.warning(
+                f"⚠️ Você selecionou **{len(uploaded_files)} PDFs**. "
+                f"O limite é **{PDF_LIMIT} arquivos** por análise para garantir estabilidade. "
+                f"Apenas os primeiros {PDF_LIMIT} serão processados."
+            )
+            uploaded_files = uploaded_files[:PDF_LIMIT]
+
         total_size = sum(f.size for f in uploaded_files) / 1024
         if len(uploaded_files) == 1:
             st.success(f"**1 arquivo** carregado — {uploaded_files[0].name} ({total_size:.1f} KB)")
