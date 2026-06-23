@@ -1,0 +1,1 @@
+- [Anthropic proxy 529 / model availability](anthropic-proxy-529.md) — Replit Anthropic proxy returns 529 on Opus/Sonnet during peak load; Haiku stays available. Use a model fallback chain.

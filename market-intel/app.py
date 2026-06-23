@@ -571,35 +571,57 @@ def analyze_with_claude(
     build_ext_prompt  = _build_investor_extraction_prompt   if is_investor else _build_extraction_prompt
     build_cons_prompt = _build_investor_consolidation_prompt if is_investor else _build_consolidation_prompt
 
-    def _call(max_tokens: int, messages: list, retries: int = 4) -> str:
-        """Call Claude with exponential-backoff retry.
-        529 overloaded → longer waits (10s, 20s, 40s).
-        Other 5xx     → shorter waits (3s, 6s, 12s).
+    # Model fallback chain: try the higher-quality model first, then fall back
+    # to lighter models that retain capacity when the larger ones are overloaded
+    # (529). Haiku almost always stays available during Anthropic peak load.
+    MODEL_CHAIN = ["claude-sonnet-4-6", "claude-haiku-4-5"]
+
+    def _call(max_tokens: int, messages: list, retries: int = 2) -> str:
+        """Call Claude with a model fallback chain + exponential-backoff retry.
+
+        For each model we retry on transient errors; if 529 (overloaded)
+        persists, we switch to the next model in the chain rather than failing.
         """
-        for attempt in range(retries):
-            try:
-                msg = client.messages.create(
-                    model="claude-opus-4-5",
-                    max_tokens=max_tokens,
-                    messages=messages,
-                )
-                return msg.content[0].text
-            except anthropic.APIStatusError as e:
-                is_last = attempt >= retries - 1
-                if is_last:
-                    raise
-                if e.status_code == 529:
-                    wait = 10 * (2 ** attempt)   # 10s, 20s, 40s
-                elif e.status_code >= 500:
-                    wait = 3 * (2 ** attempt)    # 3s, 6s, 12s
-                else:
-                    raise
-                if progress_callback:
-                    progress_callback(
-                        -1, -1,
-                        f"⏳ Servidor sobrecarregado — aguardando {wait}s antes de tentar novamente (tentativa {attempt + 2}/{retries})…",
+        last_err: Exception | None = None
+        for mi, model in enumerate(MODEL_CHAIN):
+            is_last_model = mi >= len(MODEL_CHAIN) - 1
+            for attempt in range(retries):
+                try:
+                    msg = client.messages.create(
+                        model=model,
+                        max_tokens=max_tokens,
+                        messages=messages,
                     )
-                time.sleep(wait)
+                    st.session_state["_models_used"] = (
+                        st.session_state.get("_models_used", set()) | {model}
+                    )
+                    return msg.content[0].text
+                except anthropic.APIStatusError as e:
+                    last_err = e
+                    is_last_attempt = attempt >= retries - 1
+                    if e.status_code == 529:
+                        if is_last_attempt:
+                            if not is_last_model and progress_callback:
+                                progress_callback(
+                                    -1, -1,
+                                    "⏳ Modelo principal sobrecarregado — alternando para o modelo alternativo (mais rápido)…",
+                                )
+                            break  # move to next model in the chain
+                        wait = 4 * (2 ** attempt)   # 4s, 8s
+                    elif e.status_code >= 500:
+                        if is_last_attempt:
+                            break
+                        wait = 3 * (2 ** attempt)   # 3s, 6s
+                    else:
+                        raise
+                    if progress_callback:
+                        progress_callback(
+                            -1, -1,
+                            f"⏳ Servidor sobrecarregado — aguardando {wait}s antes de tentar novamente…",
+                        )
+                    time.sleep(wait)
+        if last_err is not None:
+            raise last_err
         raise RuntimeError("Todas as tentativas falharam.")
 
     # ── Phase 1: per-PDF markdown extraction ─────────────────────────────────
@@ -862,6 +884,15 @@ def page_analysis(selected_lenses: list[str]):
     score_label    = "Score Buffett" if is_investor else "Score / 100"
     mode_badge     = "📈 Modo Investidor" if is_investor else "🏢 Modo Fornecedor"
 
+    if st.session_state.get("fallback_notice_for") == rec["id"]:
+        st.info(
+            "ℹ️ Os modelos principais estavam sobrecarregados (erro 529), então esta análise "
+            "foi gerada com o **modelo alternativo mais rápido (Haiku)**. A análise é válida, "
+            "mas pode ser menos aprofundada. Para uma análise com o modelo principal, refaça "
+            "mais tarde quando a capacidade normalizar."
+        )
+        del st.session_state["fallback_notice_for"]
+
     hdr_col, score_col = st.columns([5, 1])
     with hdr_col:
         st.title(f"📊 {company}{period_suffix}")
@@ -1010,6 +1041,7 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "fornecedor"):
                     step_label = "consolidando os resultados..." if total > 1 else "gerando análise completa..."
                     status_text.markdown(f"**Fase 2 —** {step_label}")
 
+            st.session_state["_models_used"] = set()
             try:
                 results = analyze_with_claude(
                     files_and_texts, company_name, period,
@@ -1047,6 +1079,10 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "fornecedor"):
                 uploaded_files[0].name.replace(".pdf", "") if len(uploaded_files) == 1 else "Empresa"
             )
             analysis_id = save_analysis(display_company, period, len(files_and_texts), results)
+
+            models_used = st.session_state.get("_models_used", set())
+            if "claude-haiku-4-5" in models_used and "claude-sonnet-4-6" not in models_used:
+                st.session_state["fallback_notice_for"] = analysis_id
 
             st.session_state["page"] = "analise_detalhe"
             st.session_state["loaded_analysis_id"] = analysis_id
