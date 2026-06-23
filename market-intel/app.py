@@ -825,6 +825,11 @@ def analyze_with_claude(
     # (529). Haiku almost always stays available during Anthropic peak load.
     MODEL_CHAIN = ["claude-sonnet-4-6", "claude-haiku-4-5"]
 
+    # DP6 mode produces 7 verbose sections (the last, "Oportunidades para a DP6",
+    # carries 3 sub-blocks); 8192 tokens truncated it mid-output, leaving the
+    # final card blank. Give DP6 more headroom; other modes keep the default.
+    out_max_tokens = 16000 if mode == "dp6" else 8192
+
     def _call(max_tokens: int, messages: list, retries: int = 2) -> str:
         """Call Claude with a model fallback chain + exponential-backoff retry.
 
@@ -883,7 +888,7 @@ def analyze_with_claude(
         if i > 0:
             time.sleep(1)  # avoid rate-limiting between consecutive calls
         prompt = build_ext_prompt(text, filename, company, period)
-        raw = _call(8192, [{"role": "user", "content": prompt}])
+        raw = _call(out_max_tokens, [{"role": "user", "content": prompt}])
         sections = _parse_md_sections(raw, active_lenses)
         per_doc_sections.append(sections)
         filenames.append(filename)
@@ -896,7 +901,7 @@ def analyze_with_claude(
         return per_doc_sections[0]
 
     prompt = build_cons_prompt(per_doc_sections, filenames, company, period)
-    raw = _call(8192, [{"role": "user", "content": prompt}])
+    raw = _call(out_max_tokens, [{"role": "user", "content": prompt}])
     return _parse_md_sections(raw, active_lenses)
 
 
@@ -979,24 +984,20 @@ def render_investor_lens_card(lens_name: str, raw_data, card_index: int):
 
 def render_dp6_lens_card(lens_name: str, raw_data, card_index: int):
     """Render a DP6 lens card. raw_data may be a markdown string or legacy dict."""
-    md_text    = _compat_md(raw_data)
-    icon       = DP6_LENS_ICONS.get(lens_name, "📌")
-    tendencia  = _extract_tendencia(md_text)
-    trend_html = render_trend_badge(tendencia)
+    md_text = _compat_md(raw_data)
+    icon    = DP6_LENS_ICONS.get(lens_name, "📌")
+    # Drop the "Tendência" line entirely — its long labels (e.g. "Em transformação")
+    # broke the card layout and add little value here.
     body = re.sub(r'\*\*Tend[êe]ncia:\*\*[^\n]*\n?', '', md_text, flags=re.IGNORECASE).strip()
 
     is_opportunity = lens_name == "Oportunidades para a DP6"
     title_color = "#7c3aed" if is_opportunity else "#1e293b"
 
-    hdr_col, badge_col = st.columns([5, 1])
-    with hdr_col:
-        st.markdown(
-            f'<div style="font-size:1.05rem;font-weight:700;color:{title_color};padding-top:2px;">'
-            f'{icon} {lens_name}</div>',
-            unsafe_allow_html=True,
-        )
-    with badge_col:
-        st.markdown(trend_html, unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="font-size:1.05rem;font-weight:700;color:{title_color};padding-top:2px;">'
+        f'{icon} {lens_name}</div>',
+        unsafe_allow_html=True,
+    )
 
     if body:
         st.markdown(_md_escape_dollars(body))
@@ -1065,10 +1066,10 @@ def page_overview():
             st.markdown(
                 "O score do **Modo DP6** é a **temperatura comercial** da empresa para a DP6 (0 a 100). "
                 "Para cada lente somamos:\n\n"
-                "- **+3 pontos** por cada *sinal para a DP6* (gancho comercial identificado)\n"
-                "- **+2 pontos** por cada *serviço DP6 recomendado* na lente de oportunidades\n"
-                "- **Prioridade:** Alta **+8**, Média **+4**\n"
-                "- **Tendência:** quente/alta **+2**, fria/queda **−1**\n\n"
+                "- **+2,5 pontos** por cada *sinal para a DP6* (gancho comercial identificado), até 3 por lente\n"
+                "- **+1,5 ponto** por cada *serviço DP6 recomendado* na lente de oportunidades, até 5\n"
+                "- **Prioridade:** Alta **+10**, Média **+5**\n"
+                "- **Tendência:** quente/alta **+1,5**, fria/queda **−1,5**\n\n"
                 "A soma é normalizada para 0–100. Quanto maior, mais quente a oportunidade de venda para a DP6."
             )
         else:
@@ -1290,10 +1291,10 @@ def page_analysis(selected_lenses: list[str]):
             st.markdown(
                 "A **Temperatura DP6** (0 a 100) mede o quão quente é a oportunidade comercial desta "
                 "empresa para a DP6. Para cada lente somamos:\n\n"
-                "- **+3 pontos** por cada *sinal para a DP6* (gancho comercial identificado)\n"
-                "- **+2 pontos** por cada *serviço DP6 recomendado* na lente de oportunidades\n"
-                "- **Prioridade:** Alta **+8**, Média **+4**\n"
-                "- **Tendência:** quente/alta **+2**, fria/queda **−1**\n\n"
+                "- **+2,5 pontos** por cada *sinal para a DP6* (gancho comercial identificado), até 3 por lente\n"
+                "- **+1,5 ponto** por cada *serviço DP6 recomendado* na lente de oportunidades, até 5\n"
+                "- **Prioridade:** Alta **+10**, Média **+5**\n"
+                "- **Tendência:** quente/alta **+1,5**, fria/queda **−1,5**\n\n"
                 "A soma é normalizada para 0–100. Quanto maior, mais quente a oportunidade de venda para a DP6."
             )
         else:
@@ -1315,7 +1316,7 @@ def page_analysis(selected_lenses: list[str]):
     n_total = len(all_lenses_ref)
     st.markdown(
         f"Exibindo **{len(lenses_to_show)}** de {n_total} lentes · "
-        f"clique em **🔍 Ver detalhes** em cada card para análise aprofundada."
+        f"use o filtro na barra lateral para escolher quais lentes aparecem."
     )
     st.divider()
 

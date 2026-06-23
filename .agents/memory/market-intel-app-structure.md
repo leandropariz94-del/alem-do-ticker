@@ -19,6 +19,8 @@ description: How the market-intel Streamlit app is served and how it stores/sepa
 - **Feature flag:** env var `DP6_MODE_ENABLED`, default ON. `"0"/"false"/"off"` hide the DP6 radio option; if dp6 was the active session mode when the flag goes off, sidebar falls back to `fornecedor`. Purpose: hide DP6 mode when releasing the app to the market.
 - 7 lenses (`DP6_LENSES`): Destaque do Período, Eficiência e Performance, Evolução Digital e IA, Ecossistema de Dados, Dores e Metas Futuras, Direcionamento Estratégico, Oportunidades para a DP6.
 - Prompts: `_build_dp6_extraction_prompt` + `_build_dp6_consolidation_prompt` (shared `_DP6_SECTION_FORMAT`: Insight Consolidado / Sinais para a DP6 / Métricas / Citações; the opportunity lens adds Serviços DP6 Recomendados + Abordagem Comercial + Prioridade). Wired via `mode=="dp6"` in `analyze_with_claude`.
+- **DP6 needs more output tokens:** `analyze_with_claude` sets `out_max_tokens = 16000 if mode=="dp6" else 8192`. **Why:** DP6's 7 verbose sections (the last, Oportunidades, has 3 sub-blocks) truncated at 8192 — the final lens card rendered blank because stored content was literally `**Tendência:** Qu`. Any new verbose mode/section needs the same headroom check.
+- DP6 lens cards (`render_dp6_lens_card`) intentionally render NO trend badge — long PT trend labels ("Em transformação", "Aceleração") broke the narrow badge column. The `**Tendência:**` line is still stripped from the body. `render_trend_badge` is still used by fornecedor/investor cards.
 
 ## Score scales
 - Stored 0–100 for all modes. Displayed: investor `/10` (Buffett nota×10 stored, shown as 0–10 because users think 0–10); fornecedor & dp6 `/100`. `score_color` thresholds 70/45.
