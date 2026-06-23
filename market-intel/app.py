@@ -576,7 +576,7 @@ def analyze_with_claude(
         for attempt in range(retries):
             try:
                 msg = client.messages.create(
-                    model="claude-opus-4-5",
+                    model="claude-3-5-sonnet-20241022",
                     max_tokens=max_tokens,
                     messages=messages,
                 )
@@ -595,6 +595,8 @@ def analyze_with_claude(
     for i, (filename, text) in enumerate(files_and_texts):
         if progress_callback:
             progress_callback(i, total, filename)
+        if i > 0:
+            time.sleep(1)  # avoid rate-limiting between consecutive calls
         prompt = build_ext_prompt(text, filename, company, period)
         raw = _call(4000, [{"role": "user", "content": prompt}])
         sections = _parse_md_sections(raw, active_lenses)
