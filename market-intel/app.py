@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 from datetime import datetime
 
 st.set_page_config(
@@ -351,7 +352,7 @@ REGRAS:
 - Seja específico; use apenas dados presentes no documento
 
 DOCUMENTO — {filename}:
-{pdf_text[:30000]}
+{pdf_text[:20000]}
 """
 
 
@@ -413,7 +414,7 @@ REGRAS:
 - 2-4 bullets por subseção; omita sem dados
 
 DOCUMENTO — {filename}:
-{pdf_text[:30000]}
+{pdf_text[:20000]}
 """
 
 
@@ -570,6 +571,23 @@ def analyze_with_claude(
     build_ext_prompt  = _build_investor_extraction_prompt   if is_investor else _build_extraction_prompt
     build_cons_prompt = _build_investor_consolidation_prompt if is_investor else _build_consolidation_prompt
 
+    def _call(max_tokens: int, messages: list, retries: int = 3) -> str:
+        """Call Claude with exponential-backoff retry on transient 5xx errors."""
+        for attempt in range(retries):
+            try:
+                msg = client.messages.create(
+                    model="claude-opus-4-5",
+                    max_tokens=max_tokens,
+                    messages=messages,
+                )
+                return msg.content[0].text
+            except anthropic.APIStatusError as e:
+                if e.status_code >= 500 and attempt < retries - 1:
+                    time.sleep(2 ** attempt)  # 1s, 2s, 4s …
+                    continue
+                raise
+        raise RuntimeError("Todas as tentativas falharam.")
+
     # ── Phase 1: per-PDF markdown extraction ─────────────────────────────────
     per_doc_sections: list[dict[str, str]] = []
     filenames: list[str] = []
@@ -578,12 +596,8 @@ def analyze_with_claude(
         if progress_callback:
             progress_callback(i, total, filename)
         prompt = build_ext_prompt(text, filename, company, period)
-        msg = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        sections = _parse_md_sections(msg.content[0].text, active_lenses)
+        raw = _call(4000, [{"role": "user", "content": prompt}])
+        sections = _parse_md_sections(raw, active_lenses)
         per_doc_sections.append(sections)
         filenames.append(filename)
 
@@ -595,12 +609,8 @@ def analyze_with_claude(
         return per_doc_sections[0]
 
     prompt = build_cons_prompt(per_doc_sections, filenames, company, period)
-    msg = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=5000,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return _parse_md_sections(msg.content[0].text, active_lenses)
+    raw = _call(5000, [{"role": "user", "content": prompt}])
+    return _parse_md_sections(raw, active_lenses)
 
 
 # ─── Render helpers ───────────────────────────────────────────────────────────
