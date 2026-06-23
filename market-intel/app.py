@@ -352,7 +352,7 @@ REGRAS:
 - Seja específico; use apenas dados presentes no documento
 
 DOCUMENTO — {filename}:
-{pdf_text[:20000]}
+{pdf_text[:8000]}
 """
 
 
@@ -414,7 +414,7 @@ REGRAS:
 - 2-4 bullets por subseção; omita sem dados
 
 DOCUMENTO — {filename}:
-{pdf_text[:20000]}
+{pdf_text[:8000]}
 """
 
 
@@ -576,7 +576,7 @@ def analyze_with_claude(
         for attempt in range(retries):
             try:
                 msg = client.messages.create(
-                    model="claude-3-5-sonnet-20241022",
+                    model="claude-opus-4-5",
                     max_tokens=max_tokens,
                     messages=messages,
                 )
