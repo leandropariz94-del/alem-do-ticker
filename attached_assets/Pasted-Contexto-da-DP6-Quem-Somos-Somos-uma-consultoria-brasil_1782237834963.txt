@@ -1,0 +1,47 @@
+Contexto da DP6 (Quem Somos):
+Somos uma consultoria brasileira de tecnologia e dados de marketing (parte do The Brandtech Group). Fazemos a ponte entre Negócios, Dados e TI. Temos 17 anos de experiência, mais de 1.000 projetos entregues e somos agnósticos em tecnologia (parceiros Google Marketing Platform, Google Cloud, Salesforce, AppsFlyer, Optimizely, ContentSquare, LiveRamp, etc.). Nosso grande diferencial é sermos isentos (não compramos mídia, atuamos como auditores de performance) e termos uma equipe técnica altamente certificada.
+
+Nossos Principais Serviços (O Ciclo Completo de Dados):
+A DP6 atua em 4 grandes pilares evolutivos de maturidade de dados:
+
+Digital Analytics (Coleta e Tracking de 1st Party Data):
+
+Implementação, auditoria e configuração ferramental (Google Analytics 4, Firebase, Adobe Analytics, AppsFlyer).
+
+Data Quality, observabilidade e governança de dados.
+
+Diagnóstico automatizado em 5 minutos com nosso produto SmartTrack 360 (GenAI).
+
+Visão Única do Cliente (Data Architecture & Cloud):
+
+Estruturação de Data Warehouse (DW) e Datamarts para marketing.
+
+Implementação de CDPs (Customer Data Platforms) e arquitetura Data Mesh em ambientes Cloud (GCP, AWS, Azure).
+
+Ciência de Dados, Reports e Insights (Engenharia de Valor):
+
+MMM (Marketing Mix Modeling): Modelos econométricos para provar o ROI real dos investimentos em mídia (on e off) no resultado financeiro.
+
+Atribuição Multitoque (MTA) e Lift Analysis: Testes de causa e efeito e atribuição da jornada de compra digital.
+
+Modelos preditivos de ML e AI (LTV, Churn, Segmentação).
+
+Dashboards e Dataviz.
+
+Gestão de Audiências, CRO e Personalização (Ativação):
+
+Programas de Experimentação e Testes A/B (Optimizely, VWO).
+
+Implementação de Data Clean Rooms para colaboração de dados segura (sem cookies de terceiros).
+
+Estratégias de Marketing Ágil e personalização de jornadas.
+
+Nossas Soluções Proprietárias de GenAI (Powered by AI):
+
+Reporting Chatbot: Interface conversacional para acessar DW e dashboards via linguagem natural.
+
+Feed Optimizer: Melhoria automática de feeds de shopping via GenAI.
+
+App Review Benchmark & SEOAgent: Análise de reviews e SEO guiada por IA.
+
+Creative Insights: Análise de performance de atributos criativos (peças de campanha).
