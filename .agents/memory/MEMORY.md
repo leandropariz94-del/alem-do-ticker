@@ -1,3 +1,3 @@
 - [Anthropic proxy 529 / model availability](anthropic-proxy-529.md) — Replit Anthropic proxy returns 529 on Opus/Sonnet during peak load; Haiku stays available. Use a model fallback chain.
 - [Streamlit markdown gotchas](streamlit-markdown-gotchas.md) — st.markdown treats `$...$` as LaTeX (breaks R$/US$ text); low max_tokens truncates multi-section LLM output.
-- [Market Intel app structure](market-intel-app-structure.md) — which workflow serves Streamlit can flip (restart whichever is RUNNING, leave FAILED duplicate); `mode` column separates Fornecedor/Investidor/DP6 (DP6 behind `DP6_MODE_ENABLED` flag); no preview screenshot path.
+- [Além do Ticker (market-intel) app structure](market-intel-app-structure.md) — single-purpose investor Streamlit app (DP6/Fornecedor removed); AI emits 6 lenses + 3 method scores (Buffett/Barsi/Graham); which workflow serves Streamlit can flip; no preview screenshot path.

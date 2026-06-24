@@ -9,8 +9,8 @@ import time
 from datetime import datetime
 
 st.set_page_config(
-    page_title="Market Intel",
-    page_icon="📊",
+    page_title="Além do Ticker",
+    page_icon="📈",
     layout="wide",
 )
 
@@ -23,7 +23,6 @@ INVESTOR_LENSES = [
     "Gestão e Governança",
     "Riscos Declarados",
     "Guidance e Perspectivas",
-    "Score Buffett",
 ]
 
 INVESTOR_LENS_ICONS = {
@@ -33,70 +32,63 @@ INVESTOR_LENS_ICONS = {
     "Gestão e Governança":         "👔",
     "Riscos Declarados":           "⚠️",
     "Guidance e Perspectivas":     "🔭",
-    "Score Buffett":               "🧾",
 }
 
-# ── Modo DP6 ───────────────────────────────────────────────────────────────────
-# Inteligência comercial sob medida para a DP6: lê releases de empresas-alvo e
-# mapeia onde a DP6 pode vender seus serviços de dados/analytics/IA de marketing.
-# "Oportunidades para a DP6" é a chave única usada para detectar este modo.
-DP6_LENSES = [
-    "Destaque do Período",
-    "Eficiência e Performance",
-    "Evolução Digital e IA",
-    "Ecossistema de Dados",
-    "Dores e Metas Futuras",
-    "Direcionamento Estratégico",
-    "Oportunidades para a DP6",
-]
+# ── Scores de metodologia ──────────────────────────────────────────────────────
+# Cada análise gera 3 notas de 1 a 10, cada uma baseada em uma metodologia de
+# investimento reconhecida, com uma justificativa curta ancorada no relatório.
+# Exibidas como um painel de avaliação no topo, antes das lentes detalhadas.
+SCORE_METHODOLOGIES = ["Score Buffett", "Score Barsi", "Score Graham"]
 
-DP6_LENS_ICONS = {
-    "Destaque do Período":        "📣",
-    "Eficiência e Performance":   "📈",
-    "Evolução Digital e IA":      "🤖",
-    "Ecossistema de Dados":       "🗄️",
-    "Dores e Metas Futuras":      "🎯",
-    "Direcionamento Estratégico": "🧭",
-    "Oportunidades para a DP6":   "🤝",
+SCORE_META = {
+    "Score Buffett": {
+        "icon": "🏰",
+        "investor": "Warren Buffett",
+        "subtitle": "Qualidade do negócio",
+        "criteria": [
+            "ROE consistente",
+            "Margem líquida estável",
+            "Dívida controlada",
+            "Vantagem competitiva durável (moat)",
+            "Gestão transparente",
+            "Crescimento previsível",
+        ],
+    },
+    "Score Barsi": {
+        "icon": "💵",
+        "investor": "Luiz Barsi",
+        "subtitle": "Dividendos & renda",
+        "criteria": [
+            "Dividend yield histórico",
+            "Consistência de proventos",
+            "Solidez do setor",
+            "Empresa perene",
+            "Fluxo de caixa estável",
+        ],
+    },
+    "Score Graham": {
+        "icon": "🛡️",
+        "investor": "Benjamin Graham",
+        "subtitle": "Margem de segurança",
+        "criteria": [
+            "Margem de segurança",
+            "P/L conservador",
+            "Liquidez",
+            "Baixo endividamento",
+            "Estabilidade de lucros nos últimos anos",
+        ],
+    },
 }
 
-DP6_CONTEXT = (
-    "A DP6 é uma consultoria brasileira de tecnologia e dados de marketing (parte do The Brandtech "
-    "Group), isenta — não compra mídia, atua como auditora de performance, com equipe técnica "
-    "altamente certificada. Atua em 5 frentes: "
-    "(1) Digital Analytics — implementação/auditoria de GA4, Firebase, Adobe Analytics e AppsFlyer, "
-    "data quality, observabilidade e governança de dados (produto SmartTrack 360, GenAI); "
-    "(2) Visão Única do Cliente — Data Warehouse, Datamarts, CDPs e arquitetura Data Mesh em Cloud "
-    "(GCP/AWS/Azure); "
-    "(3) Ciência de Dados, Reports e Insights — MMM (Marketing Mix Modeling), Atribuição Multitoque "
-    "(MTA), Lift Analysis, modelos preditivos de ML/IA (LTV, Churn, Segmentação), dashboards e dataviz; "
-    "(4) Audiências, CRO e Personalização — programas de testes A/B (Optimizely/VWO), Data Clean Rooms, "
-    "marketing ágil e personalização de jornadas; "
-    "(5) Soluções GenAI proprietárias — Reporting Chatbot, Feed Optimizer, App Review Benchmark, "
-    "SEOAgent e Creative Insights."
-)
+# Lista completa de seções que a IA gera e que o parser precisa reconhecer:
+# as 6 lentes analíticas + os 3 scores de metodologia.
+INVESTOR_SECTIONS = INVESTOR_LENSES + SCORE_METHODOLOGIES
 
-
-def dp6_enabled() -> bool:
-    """Feature flag for the DP6 module. Default ON (internal use).
-
-    Set the env var DP6_MODE_ENABLED to '0'/'false'/'off' to hide the DP6 mode
-    from the UI (e.g. before releasing the app to the broader market). No code is
-    removed — flip the flag back to re-enable it.
-    """
-    val = os.environ.get("DP6_MODE_ENABLED", "1").strip().lower()
-    return val not in ("0", "false", "no", "off", "")
-
-
-def lenses_for_mode(mode: str) -> list[str]:
-    if mode == "dp6":
-        return DP6_LENSES
+def lenses_for_mode(mode: str = "investor") -> list[str]:
     return INVESTOR_LENSES
 
 
-def icons_for_mode(mode: str) -> dict[str, str]:
-    if mode == "dp6":
-        return DP6_LENS_ICONS
+def icons_for_mode(mode: str = "investor") -> dict[str, str]:
     return INVESTOR_LENS_ICONS
 
 
@@ -130,29 +122,26 @@ def init_db():
 
 
 def _detect_mode(results: dict) -> str:
-    """Detect the analysis mode from the lens keys present in the results.
-
-    DP6 is identified by its sentinel lens; everything else defaults to the
-    investor module (the only other mode)."""
-    if "Oportunidades para a DP6" in results:
-        return "dp6"
+    """App de propósito único: toda análise é do investidor pessoa física."""
     return "investor"
 
 
 def compute_investor_score(results: dict) -> float:
-    """Score investor mode — extract Buffett nota from markdown (×10 → 0–100 scale)."""
-    buffett_md = _compat_md(results.get("Score Buffett", ""))
-    m = re.search(r'\*\*Nota:\*\*\s*(\d+)', buffett_md, re.IGNORECASE)
-    if m:
-        nota = int(m.group(1))
-        return round(min(100.0, max(0.0, nota * 10)), 1)
-    # Fallback: composite from regular investor lenses
+    """Score geral — média das 3 notas de metodologia (Buffett, Barsi, Graham),
+    de 1 a 10, convertida para a escala 0–100 (média × 10)."""
+    notas = []
+    for name in SCORE_METHODOLOGIES:
+        nota = _extract_nota(_compat_md(results.get(name, "")))
+        if nota is not None:
+            notas.append(nota)
+    if notas:
+        avg = sum(notas) / len(notas)
+        return round(min(100.0, max(0.0, avg * 10)), 1)
+    # Fallback: composto a partir das lentes analíticas, caso as notas faltem.
     total = 0.0
     count = 0
-    for lens, raw in results.items():
-        if lens == "Score Buffett":
-            continue
-        md = _compat_md(raw)
+    for lens in INVESTOR_LENSES:
+        md = _compat_md(results.get(lens, ""))
         n_i = _count_bullets(md, "Insights de Investimento")
         n_r = _count_bullets(md, "Riscos")
         trend = _extract_tendencia(md).lower()
@@ -167,37 +156,7 @@ def compute_investor_score(results: dict) -> float:
     return round(max(0.0, min(100.0, (total + 15.0) / 105.0 * 100)), 1)
 
 
-def compute_dp6_score(results: dict) -> float:
-    """Score DP6 mode — a 0-100 'commercial temperature' for DP6.
-
-    Rewards explicit DP6 sales signals ("Sinais para a DP6"), concrete service
-    recommendations and a high declared priority; mild trend adjustment."""
-    total = 0.0
-    for lens, raw in results.items():
-        md = _compat_md(raw)
-        # Cap per-lens bullet contributions so a verbose section can't dominate.
-        total += min(_count_bullets(md, "Sinais para a DP6"), 3) * 2.5
-        if lens == "Oportunidades para a DP6":
-            total += min(_count_bullets(md, "Serviços DP6 Recomendados"), 5) * 1.5
-            low = md.lower()
-            if re.search(r'prioridade:\*\*\s*alta', low):
-                total += 10.0
-            elif re.search(r'prioridade:\*\*\s*m[ée]dia', low):
-                total += 5.0
-        trend = _extract_tendencia(md).lower()
-        if any(w in trend for w in ["alta", "quente", "crescimento", "aceleração", "aceleracao", "expansão"]):
-            total += 1.5
-        elif any(w in trend for w in ["queda", "frio", "redução", "reducao", "declínio"]):
-            total -= 1.5
-    # Denominator sits above the realistic max so even strong leads keep headroom
-    # (typical ~40-50, strong ~80-90), preserving discrimination at the top.
-    normalized = total / 80.0 * 100
-    return round(max(0.0, min(100.0, normalized)), 1)
-
-
 def _score_for_mode(mode: str, results: dict) -> float:
-    if mode == "dp6":
-        return compute_dp6_score(results)
     return compute_investor_score(results)
 
 
@@ -361,6 +320,29 @@ def _extract_tendencia(md: str) -> str:
     return m.group(1).strip() if m else "Estável"
 
 
+def _extract_nota(md: str, default=None):
+    """Parse the **Nota:** N value (1-10) from a score section's markdown."""
+    m = re.search(r'\*\*Nota:\*\*\s*(\d+)', md, re.IGNORECASE)
+    if not m:
+        return default
+    return max(1, min(10, int(m.group(1))))
+
+
+def _extract_justificativa(md: str) -> str:
+    """Parse the **Justificativa:** paragraph (stops at the next **Header:**)."""
+    m = re.search(
+        r'\*\*Justificativa:\*\*\s*(.+?)(?=\n\s*\*\*[^\n]+:\*\*|\Z)',
+        md, re.IGNORECASE | re.DOTALL,
+    )
+    return m.group(1).strip() if m else ""
+
+
+def _extract_criteria_block(md: str) -> str:
+    """Parse the **Por critério:** bullet block from a score section's markdown."""
+    m = re.search(r'\*\*Por crit[ée]rio:\*\*\s*(.+)', md, re.IGNORECASE | re.DOTALL)
+    return m.group(1).strip() if m else ""
+
+
 def _count_bullets(md: str, section_header: str) -> int:
     """Count '- ' bullet lines that appear under a **SectionHeader:** in markdown."""
     escaped = re.escape(section_header)
@@ -416,18 +398,39 @@ def _compat_md(data) -> str:
 
 # ── Phase 1: markdown extraction from a single PDF ─────────────────────────
 
+def _score_format_block() -> str:
+    """Markdown spec for the 3 methodology score sections (Buffett, Barsi, Graham)."""
+    blocks: list[str] = []
+    for name in SCORE_METHODOLOGIES:
+        meta = SCORE_META[name]
+        crits = "\n".join(
+            f"- **{c}:** avaliação objetiva com base no documento" for c in meta["criteria"]
+        )
+        blocks.append(
+            f"## {name}\n\n"
+            f"**Nota:** [número de 1 a 10]/10\n\n"
+            f"**Justificativa:** 2 a 3 linhas explicando o que NO RELATÓRIO embasou a nota, "
+            f"citando dados concretos, segundo a metodologia de {meta['investor']}.\n\n"
+            f"**Por critério:**\n{crits}"
+        )
+    return "\n\n---\n\n".join(blocks)
+
+
 def _build_investor_extraction_prompt(pdf_text: str, filename: str, company: str, period: str) -> str:
-    regular = [l for l in INVESTOR_LENSES if l != "Score Buffett"]
-    lenses_list = "\n".join(f"- {l}" for l in regular)
+    lenses_list = "\n".join(f"- {l}" for l in INVESTOR_LENSES)
     header_line = _context_header(company, period)
-    return f"""Você é um analista de investimentos especializado em value investing.
+    n_total = len(INVESTOR_LENSES) + len(SCORE_METHODOLOGIES)
+    return f"""Você é um analista de investimentos para o investidor pessoa física. \
+Seu trabalho é ir ALÉM DO PREÇO DA AÇÃO: mergulhar nos números realizados, nos projetos, nas \
+perspectivas e nos objetivos declarados pela gestão nos documentos de RI.
 
-{header_line}Analise o documento abaixo e produza um relatório em markdown com 7 seções de análise de investimento.
+{header_line}Analise o documento abaixo e produza um relatório em markdown com exatamente {n_total} seções: \
+{len(INVESTOR_LENSES)} lentes analíticas seguidas de {len(SCORE_METHODOLOGIES)} scores de metodologia.
 
-LENTES REGULARES:
+LENTES ANALÍTICAS:
 {lenses_list}
 
-FORMATO PARA CADA LENTE REGULAR:
+FORMATO PARA CADA LENTE ANALÍTICA:
 
 ## [Nome da Lente]
 
@@ -450,28 +453,18 @@ FORMATO PARA CADA LENTE REGULAR:
 
 ---
 
-FORMATO PARA SCORE BUFFETT (última seção, obrigatória):
+SCORES DE METODOLOGIA (3 seções obrigatórias, ao final, nesta ordem):
 
-## Score Buffett
-
-**Nota:** [número de 1 a 10]/10
-
-**Justificativa:** Parágrafo de 3-4 frases explicando a nota com base nos critérios de Buffett.
-
-**Por critério:**
-- 🔍 **Negócio Compreensível:** avaliação
-- 🏰 **Vantagem Durável:** avaliação
-- 👔 **Gestão Confiável:** avaliação
-- 📈 **Histórico de Lucratividade:** avaliação
-- 💰 **Retorno sobre Capital:** avaliação
-- 🔭 **Perspectiva de Longo Prazo:** avaliação
+{_score_format_block()}
 
 ---
 
 REGRAS:
-- Copie o nome de cada lente EXATAMENTE como na lista acima
-- Score Buffett sempre por último
-- 2-4 bullets por subseção; omita sem dados
+- Copie o nome de cada seção EXATAMENTE como nas listas acima
+- Os 3 scores sempre por último, na ordem: Score Buffett, Score Barsi, Score Graham
+- Cada Nota de 1 a 10 deve refletir os critérios da respectiva metodologia
+- A Justificativa de cada score deve ter 2-3 linhas e citar dados concretos do relatório
+- 2-4 bullets por subseção; omita subseções sem dados
 
 DOCUMENTO — {filename}:
 {pdf_text}
@@ -484,10 +477,10 @@ def _build_investor_consolidation_prompt(
     per_doc_sections: list[dict], filenames: list[str], company: str, period: str
 ) -> str:
     header_line = _context_header(company, period)
-    regular = [l for l in INVESTOR_LENSES if l != "Score Buffett"]
-    lenses_list = "\n".join(f"- {l}" for l in regular)
+    lenses_list = "\n".join(f"- {l}" for l in INVESTOR_LENSES)
+    n_total = len(INVESTOR_LENSES) + len(SCORE_METHODOLOGIES)
     blocks: list[str] = []
-    for lens in INVESTOR_LENSES:
+    for lens in INVESTOR_SECTIONS:
         blocks.append(f"=== {lens} ===")
         for fname, sections in zip(filenames, per_doc_sections):
             text = sections.get(lens, "(sem dados)") or "(sem dados)"
@@ -495,16 +488,19 @@ def _build_investor_consolidation_prompt(
         blocks.append("")
     combined = "\n".join(blocks)
 
-    return f"""Você é um analista sênior de investimentos especializado em value investing.
+    return f"""Você é um analista sênior de investimentos para o investidor pessoa física, \
+focado em ir além do preço da ação: números realizados, projetos, perspectivas e objetivos da gestão.
 
-{header_line}Abaixo estão análises por lente extraídas de {len(per_doc_sections)} documentos.
+{header_line}Abaixo estão análises por seção extraídas de {len(per_doc_sections)} documentos da mesma empresa.
 
-Consolide em um relatório markdown final com 7 seções.
+Consolide em um único relatório markdown final com exatamente {n_total} seções \
+({len(INVESTOR_LENSES)} lentes analíticas + {len(SCORE_METHODOLOGIES)} scores de metodologia), \
+deduplicando e priorizando o mais relevante.
 
-LENTES REGULARES (use exatamente estes nomes em `## `):
+LENTES ANALÍTICAS (use exatamente estes nomes em `## `):
 {lenses_list}
 
-FORMATO LENTES REGULARES:
+FORMATO LENTES ANALÍTICAS:
 
 ## [Nome da Lente]
 
@@ -527,129 +523,17 @@ FORMATO LENTES REGULARES:
 
 ---
 
-FORMATO SCORE BUFFETT (última seção, obrigatória):
+SCORES DE METODOLOGIA (3 seções obrigatórias, ao final, nesta ordem):
 
-## Score Buffett
-
-**Nota:** [número 1-10 consolidado]/10
-
-**Justificativa:** Parágrafo consolidado...
-
-**Por critério:**
-- 🔍 **Negócio Compreensível:** avaliação final
-- 🏰 **Vantagem Durável:** avaliação final
-- 👔 **Gestão Confiável:** avaliação final
-- 📈 **Histórico de Lucratividade:** avaliação final
-- 💰 **Retorno sobre Capital:** avaliação final
-- 🔭 **Perspectiva de Longo Prazo:** avaliação final
+{_score_format_block()}
 
 ---
-
-TEXTOS POR LENTE:
-{combined}
-"""
-
-
-# ── Modo DP6: prompts de inteligência comercial ───────────────────────────────
-
-_DP6_ANALYTICAL = [l for l in DP6_LENSES if l != "Oportunidades para a DP6"]
-
-_DP6_SECTION_FORMAT = """FORMATO DAS LENTES ANALÍTICAS (todas, exceto "Oportunidades para a DP6"):
-
-## [Nome da Lente]
-
-**Tendência:** [Alta | Estável | Queda | Em transformação | Aceleração]
-
-**Insight Consolidado:**
-- análise principal, específica, com dados reais do release (estilo dossiê)
-
-**Sinais para a DP6:**
-- gancho comercial: a necessidade de dados/analytics/IA/personalização que isto revela e que a DP6 resolve
-
-**Métricas & Números:**
-- métrica com valor e contexto
-
-**Citações:**
-- "trecho real do documento [seção ou contexto]"
-
----
-
-FORMATO DA LENTE FINAL (obrigatória, sempre por último):
-
-## Oportunidades para a DP6
-
-**Tendência:** [Quente | Morno | Frio]
-
-**Serviços DP6 Recomendados:** (use "—" quando um serviço não se aplicar)
-- 🔍 **Digital Analytics:** onde/por que faz sentido
-- 🏗️ **Visão Única do Cliente (CDP & Cloud):** onde/por que faz sentido
-- 📊 **Ciência de Dados (MMM, MTA, ML):** onde/por que faz sentido
-- 🎯 **Audiências, CRO & Personalização:** onde/por que faz sentido
-- 🤖 **Soluções GenAI:** onde/por que faz sentido
-
-**Abordagem Comercial Sugerida:**
-- ângulo de pitch concreto, ancorado nas dores e metas declaradas pela empresa
-
-**Prioridade:** [Alta | Média | Baixa]"""
-
-
-def _build_dp6_extraction_prompt(pdf_text: str, filename: str, company: str, period: str) -> str:
-    lenses_list = "\n".join(f"- {l}" for l in DP6_LENSES)
-    header_line = _context_header(company, period)
-    return f"""Você é um analista de inteligência comercial da DP6.
-
-{DP6_CONTEXT}
-
-{header_line}Analise o release/relatório abaixo do ponto de vista da DP6: identifique o panorama \
-estratégico da empresa e, sobretudo, onde a DP6 pode atuar comercialmente. Produza um relatório em \
-markdown com exatamente {len(DP6_LENSES)} seções, uma por lente.
-
-LENTES A ANALISAR (use exatamente estes nomes nos headers `## `):
-{lenses_list}
-
-{_DP6_SECTION_FORMAT}
 
 REGRAS:
-- Copie o nome de cada lente EXATAMENTE como na lista acima
-- "Oportunidades para a DP6" sempre por último
-- 2 a 4 bullets por subseção; omita subseções sem dados relevantes
-- Separe cada lente com `---`
-- Seja específico; use apenas dados presentes no documento; conecte sempre os achados aos serviços da DP6
+- Os 3 scores sempre por último, na ordem: Score Buffett, Score Barsi, Score Graham
+- Cada Nota consolidada de 1 a 10; Justificativa de 2-3 linhas ancorada nos dados do relatório
 
-DOCUMENTO — {filename}:
-{pdf_text}
-"""
-
-
-def _build_dp6_consolidation_prompt(
-    per_doc_sections: list[dict], filenames: list[str], company: str, period: str
-) -> str:
-    header_line = _context_header(company, period)
-    lenses_list = "\n".join(f"- {l}" for l in DP6_LENSES)
-    blocks: list[str] = []
-    for lens in DP6_LENSES:
-        blocks.append(f"=== {lens} ===")
-        for fname, sections in zip(filenames, per_doc_sections):
-            text = sections.get(lens, "(sem dados)") or "(sem dados)"
-            blocks.append(f"[{fname}]\n{text}")
-        blocks.append("")
-    combined = "\n".join(blocks)
-
-    return f"""Você é um analista sênior de inteligência comercial da DP6.
-
-{DP6_CONTEXT}
-
-{header_line}Abaixo estão análises por lente extraídas de {len(per_doc_sections)} documentos da mesma empresa.
-
-Consolide em um único relatório markdown final, deduplicando e priorizando o mais relevante. \
-Use o MESMO formato de seção descrito a seguir.
-
-LENTES (use exatamente estes nomes nos headers `## `):
-{lenses_list}
-
-{_DP6_SECTION_FORMAT}
-
-TEXTOS POR LENTE (consolide e deduplique):
+TEXTOS POR SEÇÃO (consolide e deduplique):
 {combined}
 """
 
@@ -675,24 +559,20 @@ def analyze_with_claude(
 
     client = anthropic.Anthropic(api_key=api_key)
     total  = len(files_and_texts)
-    active_lenses = lenses_for_mode(mode)
-    if mode == "dp6":
-        build_ext_prompt  = _build_dp6_extraction_prompt
-        build_cons_prompt = _build_dp6_consolidation_prompt
-    else:
-        build_ext_prompt  = _build_investor_extraction_prompt
-        build_cons_prompt = _build_investor_consolidation_prompt
+    # O parser precisa reconhecer todas as seções: 6 lentes + 3 scores.
+    active_lenses = INVESTOR_SECTIONS
+    build_ext_prompt  = _build_investor_extraction_prompt
+    build_cons_prompt = _build_investor_consolidation_prompt
 
     # Modelo: Haiku 4.5 (datado) como principal — muito mais barato e suficiente
     # para extração estruturada. Mantemos o alias Haiku como fallback caso o
     # modelo datado fique sobrecarregado (529) durante picos de uso.
     MODEL_CHAIN = ["claude-haiku-4-5-20251001", "claude-haiku-4-5"]
 
-    # Investidor: 2000 tokens por chamada para reduzir custo (modo público).
-    # DP6: 16000 tokens — suas 7 seções verbosas (a última, "Oportunidades para
-    # a DP6", tem 3 sub-blocos) truncavam abaixo disso, deixando o último card
-    # em branco. DP6 é o modo privado, então a qualidade vem antes do custo.
-    out_max_tokens = 16000 if mode == "dp6" else 2000
+    # 8000 tokens por chamada: a saída tem 9 seções (6 lentes + 3 scores, cada um
+    # com justificativa e critérios). Folga suficiente para nada truncar/ficar em
+    # branco, mantendo custo controlado (saída real costuma ficar bem abaixo disso).
+    out_max_tokens = 8000
 
     def _call(max_tokens: int, messages: list, retries: int = 2) -> str:
         """Call Claude with a model fallback chain + exponential-backoff retry.
@@ -822,100 +702,61 @@ def render_investor_lens_card(lens_name: str, raw_data, card_index: int):
     st.divider()
 
 
-def render_dp6_lens_card(lens_name: str, raw_data, card_index: int):
-    """Render a DP6 lens card. raw_data may be a markdown string or legacy dict."""
-    md_text = _compat_md(raw_data)
-    icon    = DP6_LENS_ICONS.get(lens_name, "📌")
-    # Drop the "Tendência" line entirely — its long labels (e.g. "Em transformação")
-    # broke the card layout and add little value here.
-    body = re.sub(r'\*\*Tend[êe]ncia:\*\*[^\n]*\n?', '', md_text, flags=re.IGNORECASE).strip()
-
-    is_opportunity = lens_name == "Oportunidades para a DP6"
-    title_color = "#7c3aed" if is_opportunity else "#1e293b"
-
-    st.markdown(
-        f'<div style="font-size:1.05rem;font-weight:700;color:{title_color};padding-top:2px;">'
-        f'{icon} {lens_name}</div>',
-        unsafe_allow_html=True,
-    )
-
-    if body:
-        st.markdown(_md_escape_dollars(body))
-    st.divider()
-
-
-def render_buffett_score_card(raw_data):
-    """Render the Score Buffett card. raw_data may be markdown string or legacy dict."""
-    md_text = _compat_md(raw_data)
-
-    # Extract nota
-    m = re.search(r'\*\*Nota:\*\*\s*(\d+)', md_text, re.IGNORECASE)
-    nota = int(m.group(1)) if m else 5
-    nota = max(1, min(10, nota))
-    nota_color = "#22c55e" if nota >= 8 else ("#f59e0b" if nota >= 6 else "#ef4444")
-    pct = nota / 10
-
-    # Remove Nota line from body
-    body = re.sub(r'\*\*Nota:\*\*[^\n]*\n?', '', md_text, flags=re.IGNORECASE).strip()
-
-    nota_col, info_col = st.columns([1, 6])
-    with nota_col:
-        st.markdown(
-            f'<div style="font-size:3.2rem;font-weight:900;color:{nota_color};'
-            f'text-align:center;padding-top:4px;line-height:1;">{nota}</div>'
-            f'<div style="font-size:0.72rem;color:#b45309;text-align:center;">/ 10</div>',
-            unsafe_allow_html=True,
-        )
-    with info_col:
-        st.markdown(
-            '<div style="font-size:1.05rem;font-weight:700;color:#92400e;">🧾 Score Buffett</div>'
-            '<div style="font-size:0.8rem;color:#b45309;">Critérios de Warren Buffett</div>',
-            unsafe_allow_html=True,
-        )
-
-    st.progress(pct)
-    if body:
-        st.markdown(_md_escape_dollars(body))
+def render_score_panel(results: dict):
+    """Painel de avaliação no topo — as 3 notas de metodologia lado a lado."""
+    cols = st.columns(len(SCORE_METHODOLOGIES))
+    for col, name in zip(cols, SCORE_METHODOLOGIES):
+        meta     = SCORE_META[name]
+        md_text  = _compat_md(results.get(name, ""))
+        nota     = _extract_nota(md_text)
+        justi    = _extract_justificativa(md_text)
+        criteria = _extract_criteria_block(md_text)
+        if nota is None:
+            nota_disp, nota_color = "—", "#94a3b8"
+        else:
+            nota_disp = str(nota)
+            nota_color = "#22c55e" if nota >= 8 else ("#f59e0b" if nota >= 6 else "#ef4444")
+        with col:
+            st.markdown(
+                f'<div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;'
+                f'background:#ffffff;">'
+                f'<div style="font-size:1rem;font-weight:700;color:#1e293b;">{meta["icon"]} {name}</div>'
+                f'<div style="font-size:0.74rem;color:#64748b;margin-bottom:4px;">'
+                f'{meta["investor"]} · {meta["subtitle"]}</div>'
+                f'<div style="font-size:2.6rem;font-weight:900;color:{nota_color};line-height:1;">'
+                f'{nota_disp}<span style="font-size:0.9rem;color:#94a3b8;font-weight:600;"> / 10</span>'
+                f'</div></div>',
+                unsafe_allow_html=True,
+            )
+            if justi:
+                st.markdown(_md_escape_dollars(justi))
+            if criteria:
+                with st.expander("Por critério"):
+                    st.markdown(_md_escape_dollars(criteria))
     st.divider()
 
 
 # ─── Pages ────────────────────────────────────────────────────────────────────
 
 def page_overview():
-    mode        = st.session_state.get("mode", "investor")
-    is_investor = mode == "investor"
-    is_dp6      = mode == "dp6"
-    if is_dp6:
-        title, mode_badge = "🤝 Visão Geral — Ranking de Oportunidades DP6", "🤝 Modo DP6"
-    else:
-        title, mode_badge = "📈 Visão Geral — Ranking de Investimentos", "📈 Modo Investidor"
-    st.title(title)
-    st.caption(f"{mode_badge} · mostrando apenas as análises deste modo")
+    mode = "investor"
+    st.title("📈 Visão Geral — Ranking de Investimentos")
+    st.caption("Ranking por Score Médio (média das 3 metodologias) · todas as empresas analisadas")
 
     with st.expander("❓ Como o score é calculado?"):
-        if is_dp6:
-            st.markdown(
-                "O score do **Modo DP6** é a **temperatura comercial** da empresa para a DP6 (0 a 100). "
-                "Para cada lente somamos:\n\n"
-                "- **+2,5 pontos** por cada *sinal para a DP6* (gancho comercial identificado), até 3 por lente\n"
-                "- **+1,5 ponto** por cada *serviço DP6 recomendado* na lente de oportunidades, até 5\n"
-                "- **Prioridade:** Alta **+10**, Média **+5**\n"
-                "- **Tendência:** quente/alta **+1,5**, fria/queda **−1,5**\n\n"
-                "A soma é normalizada para 0–100. Quanto maior, mais quente a oportunidade de venda para a DP6."
-            )
-        else:
-            st.markdown(
-                "O score do **Modo Investidor** é o **Score Buffett** (0 a 10), convertido para a escala "
-                "0–100 (nota × 10). Ele resume a qualidade do negócio segundo os critérios de Warren Buffett "
-                "— vantagem competitiva durável, consistência de resultados, qualidade da gestão e previsibilidade. "
-                "Quanto maior, mais o negócio se aproxima do perfil de um bom investimento de longo prazo."
-            )
+        st.markdown(
+            "O **Score Médio** (0 a 10) é a média de três avaliações independentes do mesmo "
+            "relatório, cada uma seguindo uma metodologia consagrada:\n\n"
+            "- **🏰 Score Buffett** — qualidade do negócio (moat, ROE, gestão)\n"
+            "- **💵 Score Barsi** — dividendos e geração de renda no longo prazo\n"
+            "- **🛡️ Score Graham** — margem de segurança e preço conservador\n\n"
+            "Cada nota vai de 1 a 10 com uma justificativa ancorada nos dados do relatório."
+        )
 
     periods = list_periods(mode)
     all_analyses = list_analyses(mode)
     if not all_analyses:
-        label = "DP6" if is_dp6 else "Investidor"
-        st.info(f"Nenhuma análise salva no **Modo {label}** ainda. Faça uma nova análise para começar.")
+        st.info("Nenhuma análise salva ainda. Faça uma nova análise para começar.")
         return
 
     all_periods_option = "Todos os períodos"
@@ -974,8 +815,8 @@ def page_overview():
             st.markdown("</div>", unsafe_allow_html=True)
 
         with col_score:
-            score_val = f"{score / 10:.1f}" if is_investor else f"{score:.0f}"
-            score_max = "/ 10" if is_investor else "/ 100"
+            score_val = f"{score / 10:.1f}"
+            score_max = "/ 10"
             st.markdown(
                 f'<div style="text-align:center;padding-top:6px;">'
                 f'<div style="font-size:1.4rem;font-weight:800;color:{s_color};">{score_val}</div>'
@@ -1007,17 +848,11 @@ def page_overview():
 
         st.divider()
 
-    # Lens heatmap — top lenses across companies (mode-aware)
-    if is_dp6:
-        st.subheader("🔥 Lentes com mais sinais para a DP6 no período")
-        heatmap_lenses = [l for l in DP6_LENSES if l != "Oportunidades para a DP6"]
-        bullet_label = "Sinais para a DP6"
-        icon_map = DP6_LENS_ICONS
-    else:
-        st.subheader("🔥 Lentes com mais insights no período")
-        heatmap_lenses = [l for l in INVESTOR_LENSES if l != "Score Buffett"]
-        bullet_label = "Insights de Investimento"
-        icon_map = INVESTOR_LENS_ICONS
+    # Heatmap — lentes com mais insights entre as empresas do período
+    st.subheader("🔥 Lentes com mais insights no período")
+    heatmap_lenses = list(INVESTOR_LENSES)
+    bullet_label = "Insights de Investimento"
+    icon_map = INVESTOR_LENS_ICONS
 
     lens_op_count: dict[str, int] = {l: 0 for l in heatmap_lenses}
     for rec in rows:
@@ -1059,14 +894,8 @@ def page_analysis(selected_lenses: list[str]):
     results  = rec["results"]
     date_lbl = rec["created_at"][:10]
     period_suffix  = f" · {period}" if period else ""
-    mode           = _detect_mode(results)
-    is_investor    = mode == "investor"
-    is_dp6         = mode == "dp6"
-    all_lenses_ref = lenses_for_mode(mode)
-    if is_dp6:
-        score_label, mode_badge = "Temperatura DP6 / 100", "🤝 Modo DP6"
-    else:
-        score_label, mode_badge = "Score Buffett", "📈 Modo Investidor"
+    all_lenses_ref = INVESTOR_LENSES
+    score_label, mode_badge = "Score Médio", "📈 Modo Investidor"
 
     if st.session_state.get("fallback_notice_for") == rec["id"]:
         st.info(
@@ -1092,7 +921,7 @@ def page_analysis(selected_lenses: list[str]):
         st.title(f"📊 {company}{period_suffix}")
         st.caption(f"{mode_badge} · Análise salva em {date_lbl} · {rec['files_count']} arquivo(s)")
     with score_col:
-        score_display = f"{score / 10:.1f}/10" if is_investor else f"{score:.0f}"
+        score_display = f"{score / 10:.1f}/10"
         st.markdown(
             f'<div style="text-align:center;padding-top:10px;">'
             f'<div style="font-size:2rem;font-weight:800;color:{s_color};">{score_display}</div>'
@@ -1111,23 +940,15 @@ def page_analysis(selected_lenses: list[str]):
             st.rerun()
 
     with st.expander("❓ Como o score é calculado?"):
-        if is_dp6:
-            st.markdown(
-                "A **Temperatura DP6** (0 a 100) mede o quão quente é a oportunidade comercial desta "
-                "empresa para a DP6. Para cada lente somamos:\n\n"
-                "- **+2,5 pontos** por cada *sinal para a DP6* (gancho comercial identificado), até 3 por lente\n"
-                "- **+1,5 ponto** por cada *serviço DP6 recomendado* na lente de oportunidades, até 5\n"
-                "- **Prioridade:** Alta **+10**, Média **+5**\n"
-                "- **Tendência:** quente/alta **+1,5**, fria/queda **−1,5**\n\n"
-                "A soma é normalizada para 0–100. Quanto maior, mais quente a oportunidade de venda para a DP6."
-            )
-        else:
-            st.markdown(
-                "O **Score Buffett** vai de 0 a 10 e resume a qualidade do negócio segundo os critérios "
-                "de Warren Buffett — vantagem competitiva durável, consistência de resultados, qualidade "
-                "da gestão e previsibilidade. Quanto maior, mais o negócio se aproxima do perfil de um "
-                "bom investimento de longo prazo. (No ranking da Visão Geral ele é convertido para 0–100.)"
-            )
+        st.markdown(
+            "O **Score Médio** (0 a 10) é a média de três avaliações do mesmo relatório, cada "
+            "uma seguindo uma metodologia consagrada — **🏰 Buffett** (qualidade do negócio), "
+            "**💵 Barsi** (dividendos e renda) e **🛡️ Graham** (margem de segurança). "
+            "As três notas aparecem no painel abaixo, com a justificativa de cada uma."
+        )
+
+    st.markdown("### 🧮 Painel de Avaliação")
+    render_score_panel(results)
 
     lenses_to_show = [l for l in selected_lenses if l in results]
     if not lenses_to_show:
@@ -1136,44 +957,28 @@ def page_analysis(selected_lenses: list[str]):
 
     n_total = len(all_lenses_ref)
     st.markdown(
+        f"### 🔍 Lentes detalhadas\n"
         f"Exibindo **{len(lenses_to_show)}** de {n_total} lentes · "
         f"use o filtro na barra lateral para escolher quais lentes aparecem."
     )
     st.divider()
 
-    if is_dp6:
-        for i, lens in enumerate(lenses_to_show):
-            if lens in results:
-                render_dp6_lens_card(lens, results[lens], i)
-    else:
-        for i, lens in enumerate(lenses_to_show):
-            if lens not in results:
-                continue
-            if lens == "Score Buffett":
-                render_buffett_score_card(results[lens])
-            else:
-                render_investor_lens_card(lens, results[lens], i)
+    for i, lens in enumerate(lenses_to_show):
+        if lens in results:
+            render_investor_lens_card(lens, results[lens], i)
 
 
 def page_new_analysis(selected_lenses: list[str], mode: str = "investor"):
-    if mode == "dp6":
-        st.title("🤝 Market Intel — Visão DP6")
-        st.markdown(
-            "Faça upload de **um ou mais PDFs** do release de uma empresa-alvo e extraia **inteligência comercial "
-            "sob medida para a DP6**: panorama estratégico, dossiê de insights por categoria e as **oportunidades "
-            "concretas** mapeadas para os serviços da DP6."
-        )
-    else:
-        st.title("📈 Market Intel — Visão Investidor")
-        st.markdown(
-            "Faça upload de **um ou mais PDFs** de uma empresa e extraia análise orientada a **decisão de investimento**: "
-            "fundamentos, moat, gestão, riscos e Score Buffett."
-        )
+    st.title("📈 Além do Ticker — Nova Análise")
+    st.markdown(
+        "Faça upload de **um ou mais PDFs** de RI de uma empresa brasileira e vá **além do preço da ação**: "
+        "números realizados, projetos, perspectivas e objetivos da gestão — com avaliação por três "
+        "metodologias (**Buffett**, **Barsi** e **Graham**)."
+    )
 
-    _mods = "🤝 DP6 e 📈 Investidor" if dp6_enabled() else "📈 Investidor"
     st.caption(
-        f"💡 Um único upload roda automaticamente os módulos **{_mods}** sobre os mesmos PDFs — "
-        "o resultado fica salvo em todos. Você não precisa subir os arquivos mais de uma vez."
+        "💡 Um único upload gera o relatório completo — 6 lentes analíticas e os 3 scores de metodologia. "
+        "O resultado fica salvo no histórico."
     )
     st.divider()
 
@@ -1238,18 +1043,12 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "investor"):
             total_files = len(files_and_texts)
             total_chars = sum(len(t) for _, t in files_and_texts)
 
-            # ── Quais módulos rodar: os mesmos PDFs alimentam todos os modos.
-            # DP6 só entra quando a flag está ligada (escondido ao ir a mercado).
-            modes_to_run: list[tuple[str, str]] = []
-            if dp6_enabled():
-                modes_to_run.append(("dp6", "🤝 DP6"))
-            modes_to_run.append(("investor", "📈 Investidor"))
+            modes_to_run: list[tuple[str, str]] = [("investor", "📈 Investidor")]
             n_modes = len(modes_to_run)
 
             st.info(
                 f"**{total_files} arquivo(s)** · **{total_chars:,} chars** extraídos. "
-                f"Rodando **{n_modes} módulos** ({', '.join(lbl for _, lbl in modes_to_run)}) "
-                f"sobre os mesmos PDFs — pode levar alguns minutos."
+                "Gerando o relatório completo (6 lentes + 3 scores) — pode levar alguns minutos."
             )
 
             # ── Step 2: roda cada modo em sequência, com progresso ao vivo ──
@@ -1352,55 +1151,18 @@ def page_new_analysis(selected_lenses: list[str], mode: str = "investor"):
         files_count   = st.session_state.pop("files_count", 1)
         lenses_to_show = [l for l in selected_lenses if l in results]
         st.subheader(f"Insights — {display_company}")
+        render_score_panel(results)
         for i, lens in enumerate(lenses_to_show):
-            if mode == "dp6":
-                render_dp6_lens_card(lens, results[lens], i)
-            elif lens == "Score Buffett":
-                render_buffett_score_card(results[lens])
-            else:
-                render_investor_lens_card(lens, results[lens], i)
+            render_investor_lens_card(lens, results[lens], i)
 
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 def render_sidebar() -> tuple[list[str], str]:
     with st.sidebar:
-        st.markdown("## 📊 Market Intel")
-
-        # ── Mode toggle ──────────────────────────────────────────────────────
-        dp6_on = dp6_enabled()
-        # If DP6 was the active mode but the flag is now off, fall back gracefully.
-        if not dp6_on and st.session_state.get("mode") == "dp6":
-            st.session_state["mode"] = "investor"
-
-        st.markdown("**Modo de análise**")
-        mode_options = ["📈 Investidor"]
-        if dp6_on:
-            mode_options.append("🤝 DP6")
-        mode_to_label = {"investor": "📈 Investidor", "dp6": "🤝 DP6"}
-        current_label = mode_to_label.get(st.session_state.get("mode", "investor"), "📈 Investidor")
-        current_index = mode_options.index(current_label) if current_label in mode_options else 0
-        mode_choice = st.radio(
-            "modo",
-            options=mode_options,
-            index=current_index,
-            horizontal=True,
-            label_visibility="collapsed",
-            key="mode_radio",
-        )
-        if "DP6" in mode_choice:
-            new_mode = "dp6"
-        else:
-            new_mode = "investor"
-        if new_mode != st.session_state.get("mode"):
-            st.session_state["mode"] = new_mode
-            # Reset to new analysis when mode changes
-            st.session_state["page"] = "nova_analise"
-            if "loaded_analysis_id" in st.session_state:
-                del st.session_state["loaded_analysis_id"]
-            st.session_state.pop("ov_confirm_del", None)
-            st.session_state.pop("hist_confirm_del", None)
-            st.rerun()
+        st.markdown("## 📈 Além do Ticker")
+        st.caption("Análise de empresas além do preço da ação")
+        st.session_state["mode"] = "investor"
 
         st.divider()
 
@@ -1422,11 +1184,9 @@ def render_sidebar() -> tuple[list[str], str]:
 
         # ── Lens filter (only on analysis/new pages) ─────────────────────────
         current_page  = st.session_state.get("page", "nova_analise")
-        mode          = st.session_state.get("mode", "investor")
-        is_investor   = mode == "investor"
-        is_dp6        = mode == "dp6"
-        active_lenses = lenses_for_mode(mode)
-        active_icons  = icons_for_mode(mode)
+        mode          = "investor"
+        active_lenses = INVESTOR_LENSES
+        active_icons  = INVESTOR_LENS_ICONS
         selected_lenses: list[str] = list(active_lenses)
 
         if current_page != "visao_geral":
@@ -1444,15 +1204,14 @@ def render_sidebar() -> tuple[list[str], str]:
 
         # History
         all_analyses = list_analyses(mode)
-        mode_label = "DP6" if is_dp6 else "Investidor"
         if all_analyses:
-            st.markdown(f"**🗂️ Empresas analisadas** · {mode_label}")
+            st.markdown("**🗂️ Empresas analisadas**")
             for rec in all_analyses:
                 company  = rec["company"] or "Empresa"
                 period   = rec["period"]
                 score    = rec["score"]
                 s_color  = score_color(score)
-                score_txt = f"{score / 10:.1f}" if is_investor else f"{score:.0f}"
+                score_txt = f"{score / 10:.1f}"
                 label    = f"{company} · {period}" if period else company
                 is_active = st.session_state.get("loaded_analysis_id") == rec["id"]
 
@@ -1487,10 +1246,10 @@ def render_sidebar() -> tuple[list[str], str]:
                             st.rerun()
                 st.markdown("</div>", unsafe_allow_html=True)
         else:
-            st.caption(f"Nenhuma análise salva no Modo {mode_label} ainda.")
+            st.caption("Nenhuma análise salva ainda.")
 
         st.divider()
-        st.caption("**Market Intel** · Powered by Claude")
+        st.caption("**Além do Ticker** · Powered by Claude")
 
     return selected_lenses, mode
 

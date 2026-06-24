@@ -30,7 +30,10 @@ _Populate as you build — non-obvious choices a reader couldn't infer from the 
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- **Além do Ticker** (`market-intel/app.py`, Streamlit, Portuguese/BR) — a single-purpose app for the individual investor (investidor pessoa física). Upload company RI/release PDFs and get an in-depth analysis *beyond the stock price*: números realizados, projetos, perspectivas e objetivos da gestão.
+- Each analysis produces 6 detailed lenses (fundamentos, alocação de capital, moat, gestão, riscos, guidance) plus a **3-methodology score panel** shown at the top — Score Buffett, Score Barsi, Score Graham — each rated 1–10 with a short justificativa.
+- Uses Claude (Haiku) via the Anthropic Replit proxy (`ANTHROPIC_API_KEY`). Analyses are stored in `market-intel/market_intel.db` (SQLite). Runs on port 5000 via a Streamlit workflow (not a registered artifact).
+- See `.agents/memory/market-intel-app-structure.md` for non-obvious structure and gotchas.
 
 ## User preferences
 
